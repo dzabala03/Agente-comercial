@@ -69,7 +69,10 @@ _SYNTH_PROMPT = ChatPromptTemplate.from_messages(
             "system",
             "Respondes a un comercial combinando DATOS de la base y DOCUMENTOS "
             "internos. Usa solo la información proporcionada.\n"
-            "Responde SOLO lo que se pregunta, de forma directa y breve. Sin "
+            "- Si la pregunta pide un tramo, nivel o porcentaje que depende de una "
+            "cifra, CALCÚLALO tú: toma la cifra de DATOS y aplícale las reglas de "
+            "DOCUMENTOS (elige el tramo correcto según el importe).\n"
+            "- Responde SOLO lo que se pregunta, de forma directa y breve. Sin "
             "secciones de análisis, observaciones ni recomendaciones salvo que se "
             "pidan. Sin emojis. En español. Cita el/los documento(s) usados entre "
             "paréntesis al final.",

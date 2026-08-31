@@ -54,8 +54,14 @@ _GEN_PROMPT = ChatPromptTemplate.from_messages(
             "Esquema disponible (usa SIEMPRE el prefijo `{schema}.` en las tablas):\n"
             "{schema_info}\n\n"
             "Notas de negocio:\n"
-            "- 'compras' / 'ventas' / 'facturación' de un cliente = SUM de "
-            "{schema}.SalesOrderHeader.TotalDue para ese CustomerID.\n"
+            "- Cualquier métrica de un cliente (cuánto compra, ranking, nº de "
+            "pedidos, ticket medio) se calcula con AGREGADOS sobre "
+            "{schema}.SalesOrderHeader: SUM(TotalDue), COUNT(*), AVG(TotalDue). "
+            "NO uses columnas de líneas sueltas como UnitPriceDiscount.\n"
+            "- Si la pregunta menciona 'descuento por volumen', 'tramo', 'nivel' o "
+            "'política' aplicada a un cliente: devuelve SOLO el IMPORTE TOTAL de "
+            "compras de ese cliente (SUM(TotalDue)); el tramo/porcentaje lo aplica "
+            "otra capa, no lo calcules en SQL.\n"
             "- Usa TOP N para limitar filas, salvo que se pida un conteo o un "
             "agregado global.\n"
             "- Solo lectura: nada de INSERT/UPDATE/DELETE/DDL.",
@@ -131,10 +137,15 @@ def solve_sql(pregunta: str) -> dict:
     """
     logger.info("Pregunta SQL: %s", pregunta)
 
+    # Atajo: si la pregunta pide modificar datos, se corta ANTES de llamar al LLM.
+    if guardrails.looks_like_write_request(pregunta):
+        logger.warning("Intento de escritura detectado en la pregunta; bloqueado.")
+        return {"sql": None, "rows": None, "blocked": "intento de escritura", "error": None}
+
     sql_raw = _generate_sql(pregunta)
     clean, blocked = _check_and_prep(sql_raw)
     if blocked:
-        return {"sql": sql_raw, "rows": None, "blocked": blocked, "error": None}
+        return {"sql": None, "rows": None, "blocked": blocked, "error": None}
 
     rows, err = _execute(clean)
     if err:
@@ -142,7 +153,7 @@ def solve_sql(pregunta: str) -> dict:
         sql_raw = _generate_sql(pregunta, error_prev=err)
         clean2, blocked = _check_and_prep(sql_raw)
         if blocked:
-            return {"sql": sql_raw, "rows": None, "blocked": blocked, "error": None}
+            return {"sql": None, "rows": None, "blocked": blocked, "error": None}
         clean = clean2 or clean
         rows, err = _execute(clean)
 

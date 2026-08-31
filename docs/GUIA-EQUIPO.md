@@ -150,6 +150,11 @@ puramente documental se salta el SQL. Si el intento es de escritura
   (`SELECT COUNT(*) ...` sin `GROUP BY`) se dejan tal cual.
 - `log_query(sql, source)`: deja constancia de **toda** consulta que se va a
   ejecutar.
+- `looks_like_write_request(pregunta)`: heurística **conservadora** sobre la
+  pregunta del usuario (verbo destructivo al inicio: *borra*, *elimina*,
+  *actualiza … a …*; o SQL literal `DELETE FROM`, `UPDATE … SET`, …). Si acierta,
+  el agente responde el bloqueo **sin gastar ni una llamada al LLM**. Ante la
+  duda devuelve `False` y siguen protegiendo las demás capas.
 
 ### `src/sql_agent.py` — Text-to-SQL (2 llamadas, sin ReAct)
 - `solve_sql(pregunta)`:
@@ -213,6 +218,7 @@ destructivo (por error o inducido). La defensa es **en capas**:
 | Capa | Qué impide | Dónde |
 |---|---|---|
 | Usuario `agente_readonly` con rol `db_datareader` y `DENY` de escritura | Que *cualquier* cosa que no sea lectura llegue a ejecutarse | `sql/01_crear_usuario_readonly.sql` |
+| `looks_like_write_request` | Que una pregunta con intención de escritura evidente llegue siquiera a generar SQL | `src/guardrails.py` |
 | `validate_select_only` | Que el texto llegue siquiera a la BD si no es un `SELECT` único | `src/guardrails.py` |
 | Lista blanca de tablas / esquema | Que el agente vea o consulte tablas fuera de alcance | `src/config.py` (`SQL_INCLUDE_TABLES`) |
 | `enforce_row_limit` | Respuestas gigantes que saturen memoria o la API | `src/guardrails.py` |

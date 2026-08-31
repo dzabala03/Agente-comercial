@@ -12,6 +12,7 @@ Funciones públicas:
     validate_select_only(raw)     -> str        valida y devuelve el SQL limpio, o lanza GuardrailViolation
     enforce_row_limit(sql, n)     -> str        inyecta TOP n si no hay límite explícito
     log_query(sql, source)        -> None       registra la consulta en logs/agente.log
+    looks_like_write_request(txt) -> bool       heurística: la PREGUNTA pide modificar datos
 """
 from __future__ import annotations
 
@@ -157,3 +158,33 @@ def log_query(sql: str, source: str) -> None:
     """Registra en el log toda consulta que va a ejecutarse contra la BD real."""
     compact = " ".join(sql.split())
     logger.info("SQL [%s] -> %s", source, compact)
+
+
+# Verbo claramente destructivo al principio de la frase (imperativo en español),
+# o SQL de modificación literal en cualquier parte del texto.
+_WRITE_INTENT = re.compile(
+    r"(^\s*(b[oó]rra(me)?|el[ií]mina(me)?|elimina|suprime|inserta|vac[ií]a|"
+    r"resetea|restablece)\b)"
+    r"|(\b(delete\s+from|drop\s+table|truncate\s+table|update\s+\w+\s+set|"
+    r"insert\s+into|alter\s+table)\b)",
+    re.IGNORECASE,
+)
+# Imperativo al PRINCIPIO + "... a <valor>" = asignar un valor a un campo.
+# Debe empezar por el verbo (posición imperativa) para no confundir el
+# indicativo "¿cuánto cambia el total a fin de mes?" con una orden.
+_WRITE_ASSIGN = re.compile(
+    r"^\s*(actual[ií]za(me)?|cambia|cambi[ae]me|modifica|reemplaza|pon|"
+    r"establece|setea|marca)\b.{0,60}?\b(a|como|=)\s+\S",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def looks_like_write_request(text: str) -> bool:
+    """
+    Heurística CONSERVADORA sobre la pregunta del usuario: ¿está pidiendo
+    modificar datos? Sirve para cortar antes de gastar una llamada al LLM.
+    Ante la duda devuelve False (el guardrail de SQL sigue protegiendo).
+    """
+    if not text:
+        return False
+    return bool(_WRITE_INTENT.search(text) or _WRITE_ASSIGN.search(text))

@@ -94,3 +94,38 @@ def test_enforce_row_limit_si_toca_agregado_con_group_by():
 def test_clean_sql_quita_fences_y_comentarios():
     raw = "```sql\nSELECT 1 -- comentario\n```"
     assert g.clean_sql(raw) == "SELECT 1"
+
+
+# ---------------------------------------------------------------------------
+#  Heurística de intención de escritura (sobre la pregunta del usuario)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "pregunta",
+    [
+        "Borra el cliente con CustomerID = 1",
+        "Elimina todos los pedidos de 2020",
+        "Actualiza el apellido del cliente 10 a Prueba",
+        "bórrame ese registro",
+        "DELETE FROM SalesLT.Customer",
+        "haz un UPDATE Customer SET LastName = 'x'",
+        "inserta un nuevo producto",
+        "cambia el precio del producto 5 a 100",
+    ],
+)
+def test_detecta_intento_de_escritura(pregunta):
+    assert g.looks_like_write_request(pregunta) is True
+
+
+@pytest.mark.parametrize(
+    "pregunta",
+    [
+        "¿Cuántos clientes hay?",
+        "Dame los 5 productos más vendidos",
+        "actualízame el pipeline de ventas",  # 'actualiza' pero sin asignar un valor
+        "¿Qué clientes se dieron de baja el año pasado?",
+        "muéstrame el ranking de clientes por compras",
+        "¿cuál es la política de devoluciones?",
+    ],
+)
+def test_no_bloquea_preguntas_de_lectura(pregunta):
+    assert g.looks_like_write_request(pregunta) is False
