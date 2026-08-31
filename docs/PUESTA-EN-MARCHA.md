@@ -43,7 +43,21 @@ existe) y `venv/` (no se sube). El archivo `.env.example` **sí** se sube.
 | **ODBC Driver 18 for SQL Server** | https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server | Panel de control → "Orígenes de datos ODBC (64 bits)" → pestaña "Controladores" → debe figurar |
 | **Git** | https://git-scm.com/download/win | `git --version` |
 | **VS Code** (recomendado) | https://code.visualstudio.com/ | — |
-| **Cliente SQL** (Azure Data Studio o DBeaver) | ADS: https://learn.microsoft.com/sql/azure-data-studio/ | abre y conecta más adelante |
+| **Cliente SQL: DBeaver Community** | https://dbeaver.io/download/  (`winget install DBeaver.DBeaver.Community`) | abre y conecta más adelante |
+
+> Nota: Azure Data Studio fue retirado por Microsoft (fin de soporte feb-2026).
+> Usamos **DBeaver Community**. La primera vez que conectes a SQL Server, DBeaver
+> te ofrecerá descargar el driver JDBC de MSSQL automáticamente: acepta.
+>
+> Instalación rápida de todo con winget (PowerShell):
+> ```powershell
+> winget install --id Python.Python.3.11 -e
+> winget install --id Docker.DockerDesktop -e
+> winget install --id Microsoft.msodbcsql.18 -e
+> winget install --id Git.Git -e
+> winget install --id Microsoft.VisualStudioCode -e
+> winget install --id DBeaver.DBeaver.Community -e
+> ```
 
 ### Cuenta y API key del LLM 🧑‍💻
 
@@ -114,9 +128,11 @@ El script lee los nombres lógicos del `.bak`, restaura la base como
 
 ### 2.5 Crear el usuario de solo lectura ⚙️🧑‍💻
 
-1. Abre **Azure Data Studio** (o DBeaver) y conéctate:
-   - Servidor: `localhost,1433`  ·  Usuario: `sa`  ·  Contraseña: la de `MSSQL_SA_PASSWORD`
-   - "Trust server certificate": **sí**.
+1. Abre **DBeaver** → nueva conexión → **SQL Server** y conéctate:
+   - Host: `localhost`  ·  Puerto: `1433`  ·  Usuario: `sa`  ·  Contraseña: la de `MSSQL_SA_PASSWORD`
+   - En la pestaña de propiedades del driver marca **`trustServerCertificate = true`**
+     (o Encrypt = false). Acepta la descarga del driver JDBC si te la ofrece.
+   - Abre un editor SQL sobre esa conexión (icono "SQL" o Ctrl+]).
 2. Abre `sql/01_crear_usuario_readonly.sql`, **cambia** `CAMBIA_esta_password_1!`
    por una contraseña real y ejecútalo (F5).
 3. Anota esa contraseña: va en `.env` como `SQL_SERVER_PASSWORD`.
