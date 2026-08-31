@@ -1,0 +1,13 @@
+# Config por defecto de Streamlit para este proyecto.
+[server]
+headless = true
+port = 8501
+# address se deja sin fijar: 'streamlit run app.py' escucha solo en local.
+# Para acceso desde el móvil en la misma red usa scripts/run_lan.ps1
+# (o: streamlit run app.py --server.address 0.0.0.0)
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
