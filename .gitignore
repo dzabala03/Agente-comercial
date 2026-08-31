@@ -15,9 +15,11 @@ __pycache__/
 .mypy_cache/
 .ipynb_checkpoints/
 
-# --- Datos generados ---
+# --- Datos generados / descargados ---
 data/chroma_db/
 !data/chroma_db/.gitkeep
+data/backups/*
+!data/backups/.gitkeep
 logs/*.log
 !logs/.gitkeep
 
