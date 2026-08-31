@@ -75,6 +75,19 @@ def test_enforce_row_limit_no_toca_agregados_con_top():
     assert g.enforce_row_limit(original, 100) == original
 
 
+def test_enforce_row_limit_no_toca_count_global():
+    original = "SELECT COUNT(*) FROM SalesLT.Customer"
+    assert g.enforce_row_limit(original, 100) == original
+
+
+def test_enforce_row_limit_si_toca_agregado_con_group_by():
+    out = g.enforce_row_limit(
+        "SELECT CustomerID, SUM(TotalDue) FROM SalesLT.SalesOrderHeader GROUP BY CustomerID",
+        100,
+    )
+    assert out.upper().startswith("SELECT TOP 100 ")
+
+
 # ---------------------------------------------------------------------------
 #  Limpieza
 # ---------------------------------------------------------------------------

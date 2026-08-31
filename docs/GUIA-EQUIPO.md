@@ -47,33 +47,27 @@ Dos técnicas:
 │   pregunta del usuario                                                                 │
 │          │                                                                             │
 │          ▼                                                                             │
-│   src/router.py  ── LangGraph ──────────────────────────────────────────────────────   │
+│   src/router.py  ── prepare(pregunta) ──────────────────────────────────────────────   │
 │          │                                                                             │
-│    ┌─────┴─────────┐  nodo "classify": el LLM etiqueta la pregunta                     │
-│    │               │  como  sql | rag | mixta                                          │
-│    ▼               ▼                                                                   │
-│  nodo sql        nodo rag                                                              │
-│    │               │                                                                   │
-│    ▼               ▼                                                                   │
-│ src/sql_agent   src/rag_agent                                                          │
-│  ReAct agent     retriever + prompt                                                    │
-│  + 3 tools           │                                                                 │
-│    │                 ▼                                                                  │
-│    │           Chroma (data/chroma_db)  ◀── src/ingest.py indexa data/docs/*           │
-│    ▼                                                                                    │
-│ src/guardrails.py  ── valida "solo SELECT" + inyecta TOP N + log                       │
-│    │                                                                                    │
-│    ▼                                                                                    │
-│ SQL Server (contenedor Docker)   ── usuario  agente_readonly  (db_datareader)          │
+│    _classify(): palabras clave inequívocas -> sql | rag ; si hay duda, 1 llamada al LLM │
+│          │                                                                             │
+│    ┌─────┴───────────────┐                                                             │
+│    ▼ (sql / mixta)       ▼ (rag)                                                       │
+│ src/sql_agent.solve_sql  src/rag_agent.retrieve                                        │
+│   1. LLM: generar SELECT   busca en Chroma los k fragmentos                            │
+│      (esquema en el prompt)      más parecidos                                         │
+│   2. guardrails.validate_select_only  ── "solo SELECT" + TOP N + log                   │
+│   3. ejecutar (usuario readonly)   Chroma (data/chroma_db) ◀ src/ingest.py ◀ data/docs/*│
+│    │                     │                                                             │
+│    ▼                     ▼                                                             │
+│ SQL Server 2025 (Docker, usuario agente_readonly / db_datareader)                      │
 │                                                                                        │
-│   ┌────────────────── nodo "synthesize" ──────────────────┐                            │
-│   │  sql  -> devuelve la respuesta del agente SQL          │                            │
-│   │  rag  -> devuelve la respuesta del agente RAG          │                            │
-│   │  mixta-> el LLM combina ambas en una sola respuesta    │                            │
-│   └───────────────────────────────────────────────────────┘                            │
+│   respuesta final = 1 llamada al LLM EN STREAMING:                                     │
+│     sql  -> explicar el resultado          rag -> responder con el contexto            │
+│     mixta-> sintetizar datos + documentos                                             │
 │          │                                                                             │
 │          ▼                                                                             │
-│   respuesta + "Detalle": ruta usada, SQL ejecutado, documento citado                   │
+│   st.write_stream(...)  +  "Detalle": ruta, SQL ejecutado, documento citado           │
 └───────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -81,7 +75,7 @@ Componentes externos:
 
 | Componente | Rol | Dónde corre |
 |---|---|---|
-| **LLM** (DeepSeek u OpenAI) | Clasificar, generar SQL, redactar respuestas | API externa (de pago por uso) |
+| **LLM** (OpenRouter / DeepSeek / OpenAI / Ollama) | Clasificar, generar SQL, redactar respuestas | API externa (u Ollama local) |
 | **Embeddings** | Convertir texto en vectores para la búsqueda del RAG | Local (`fastembed`, sin coste) o API OpenAI |
 | **SQL Server 2025** | Almacén de datos estructurados | Contenedor Docker en el PC |
 | **Chroma** | Vector store del RAG (persistido en disco) | Carpeta `data/chroma_db/` |
@@ -93,33 +87,35 @@ Componentes externos:
 
 Ejemplo: *"¿Qué descuento máximo puedo aplicar al cliente que más ha comprado?"*
 
-1. **Streamlit** (`app.py`) recibe el texto y llama a `run_router(pregunta)`.
-2. **Router — nodo `classify`** (`src/router.py`): el LLM recibe la pregunta con
-   un prompt que trae ejemplos (*few-shot*) y responde una palabra. Aquí:
-   `mixta` (necesita datos **y** documento).
-3. **Router — nodo `sql`**: llama a `answer_sql(pregunta)`.
-   - El **agente ReAct** (`src/sql_agent.py`) razona en bucle: puede llamar a
-     `list_tables`, `describe_tables` para ver el esquema, y finalmente escribe
-     una consulta y la pasa a `run_safe_query`.
-   - `run_safe_query` **no ejecuta nada todavía**: primero llama a
-     `guardrails.validate_select_only`. Si el SQL no es un `SELECT` puro, se
-     rechaza y el agente recibe el mensaje de bloqueo.
-   - Si pasa la validación, `guardrails.enforce_row_limit` añade `TOP 100` si no
-     hay límite, se registra en `logs/agente.log` y se ejecuta contra SQL Server
-     con el usuario **de solo lectura**.
-   - El agente recibe las filas y redacta una respuesta en español.
-4. **Router — nodo `rag`** (porque era `mixta`): llama a `answer_rag(pregunta)`.
-   - Se convierte la pregunta en un vector (embeddings) y se piden a **Chroma**
-     los 4 fragmentos más similares (todos de `politica-descuentos-comerciales.txt`).
-   - Esos fragmentos + la pregunta van al LLM con la instrucción de responder
-     **solo con ese contexto** y **citar el archivo**.
-5. **Router — nodo `synthesize`**: como la ruta fue `mixta`, el LLM recibe las
-   dos respuestas parciales y las funde en una sola, coherente y sin repetir.
-6. **Streamlit** muestra la respuesta final y, en un desplegable "Detalle", la
-   ruta (`mixta`), el SQL ejecutado y el documento citado.
+1. **Streamlit** (`app.py`) llama a `router.prepare(pregunta)`, que hace la parte
+   "lenta" (clasificar + consultar) mientras se muestra "Consultando...".
+2. **`_classify`** (`src/router.py`): primero mira palabras clave. Aquí aparecen
+   señales de datos (*cliente*, *comprado*) **y** de documento (*descuento*), así
+   que no puede decidir sola → **1 llamada al LLM** con ejemplos *few-shot* →
+   responde `mixta`.
+3. **`sql_agent.solve_sql(pregunta)`** (2 pasos, sin agente ReAct):
+   - **Llamada 1 al LLM**: genera un `SELECT`. El esquema de las 8 tablas va
+     **fijo en el prompt**, así que no hace falta que el modelo lo pida.
+   - `guardrails.validate_select_only` comprueba que es un `SELECT` único; si no,
+     se rechaza y se devuelve el mensaje de bloqueo (sin más llamadas).
+   - `guardrails.enforce_row_limit` añade `TOP 100` si falta (salvo conteos), se
+     registra en `logs/agente.log` y se ejecuta con el usuario **de solo lectura**.
+   - Si la consulta falla al ejecutarse, hay **un** reintento (se le pasa el error
+     al LLM para que la corrija).
+4. **`rag_agent.retrieve(pregunta)`** (porque es `mixta`): convierte la pregunta
+   en vector y pide a **Chroma** los *k* fragmentos más parecidos
+   (`politica-descuentos-comerciales.txt`). Esto **no** gasta llamada al LLM.
+5. **Respuesta final = 1 llamada al LLM en streaming**: recibe la pregunta + las
+   filas del SQL + los fragmentos, y redacta una respuesta combinada, **breve y
+   sin análisis no solicitado**, citando el documento. `st.write_stream` la va
+   pintando palabra a palabra en el móvil/navegador.
+6. El desplegable "Detalle" muestra la ruta (`mixta`), el SQL ejecutado y el
+   documento citado.
 
-Para una pregunta puramente de datos, el router salta el nodo `rag`; para una
-puramente documental, salta el nodo `sql`.
+Recuento de llamadas al LLM por pregunta: **sql** ≈ 2-3, **rag** ≈ 1-2,
+**mixta** ≈ 3. Para una pregunta puramente de datos se salta el RAG; para una
+puramente documental se salta el SQL. Si el intento es de escritura
+(`borra...`, `actualiza...`), se responde al instante **sin ninguna llamada**.
 
 ---
 
@@ -130,7 +126,10 @@ puramente documental, salta el nodo `sql`.
 - Valida que las variables obligatorias existan y da mensajes claros si faltan.
 - Configura el **logging**: consola + archivo rotatorio `logs/agente.log`.
 - Fábricas cacheadas:
-  - `get_llm()` → cliente de chat (`ChatOpenAI` apuntando a DeepSeek u OpenAI).
+  - `get_llm(reasoning=True/False)` → cliente de chat (`ChatOpenAI` apuntando a
+    OpenRouter / DeepSeek / OpenAI / Ollama). Con `reasoning=False` pide al
+    proveedor que no emita cadena de pensamiento (llamadas de explicar/clasificar
+    /sintetizar: más rápidas y concisas).
   - `get_embeddings()` → `fastembed` local o `OpenAIEmbeddings`.
   - `get_sql_engine()` → engine SQLAlchemy con **timeout de consulta** a nivel de
     driver.
@@ -147,21 +146,26 @@ puramente documental, salta el nodo `sql`.
     `MERGE`, `GRANT`, `sp_`, `xp_`, ...);
   - hay `SELECT ... INTO` (crea tablas).
 - `enforce_row_limit(sql, n)`: si no hay `TOP` ni `OFFSET/FETCH`, inyecta
-  `TOP n` tras el `SELECT`.
+  `TOP n` tras el `SELECT`. Excepción: los agregados globales
+  (`SELECT COUNT(*) ...` sin `GROUP BY`) se dejan tal cual.
 - `log_query(sql, source)`: deja constancia de **toda** consulta que se va a
   ejecutar.
 
-### `src/sql_agent.py` — Text-to-SQL
-- Agente **ReAct** (`langgraph.prebuilt.create_react_agent`) con `get_llm()` y
-  tres herramientas propias:
-  - `list_tables()` — lista blanca de tablas.
-  - `describe_tables(tablas)` — DDL + 2 filas de muestra de cada tabla.
-  - `run_safe_query(sql)` — **único** punto que toca la BD; pasa por guardrails.
-- `SYSTEM_PROMPT` explica el negocio (qué es un cliente, qué tabla tiene los
-  importes, etc.) para reducir errores de esquema, y obliga a responder en
-  lenguaje natural, no en tabla cruda.
-- `answer_sql()` nunca lanza excepción: si algo falla, lo devuelve en `error`.
-  También extrae la lista de SQL realmente ejecutados para mostrarla en la UI.
+### `src/sql_agent.py` — Text-to-SQL (2 llamadas, sin ReAct)
+- `solve_sql(pregunta)`:
+  1. **1 llamada al LLM** para generar el `SELECT`. El esquema de las tablas
+     permitidas va **fijo en el prompt** (`_schema_info()`, cacheado), así el
+     modelo no necesita "herramientas" para explorarlo → menos llamadas.
+  2. `guardrails.validate_select_only` + `enforce_row_limit` + `log_query`.
+  3. Ejecuta contra la BD con el usuario de solo lectura. Si falla, **un**
+     reintento pasándole el error al LLM.
+- `explain_messages(...)`: prompt de la **2.ª llamada** (explicar el resultado),
+  con reglas de estilo estrictas: responder solo lo que se pregunta, sin
+  secciones de análisis/observaciones/recomendaciones no pedidas, sin emojis.
+- `answer_sql()` (sin streaming, para tests/CLI) nunca lanza: los errores van en
+  `error`. En la app, el router hace la 2.ª llamada en streaming.
+- Intento de escritura (`borra`, `update`, …): se corta en el paso 2 y se
+  devuelve `BLOCKED_MSG` **sin gastar la llamada de explicación**.
 
 ### `src/ingest.py` — indexado del RAG (se ejecuta a mano)
 - Lee `data/docs/` (`.pdf`, `.docx`, `.txt`, `.md`), guarda el nombre de archivo
@@ -172,23 +176,30 @@ puramente documental, salta el nodo `sql`.
 - **No** se ejecuta al arrancar la app: solo cuando cambian los documentos.
 
 ### `src/rag_agent.py` — RAG
-- Carga el retriever de Chroma (top-k = 4).
-- Prompt estricto: *responde solo con el contexto; si no está, di "No tengo esa
-  información en los documentos disponibles"; cita el archivo*.
-- `answer_rag()` devuelve `answer` + `sources` (archivos usados) + `error`.
+- `retrieve(pregunta)` → `(contexto, fuentes)` desde Chroma (top-k = 4, ajustado
+  a la baja si hay menos fragmentos). No gasta llamada al LLM.
+- `answer_messages(...)` → prompt estricto: *responde solo con el contexto; si no
+  está, di "No tengo esa información en los documentos disponibles"; cita el
+  archivo; sé breve y sin análisis no pedido*.
+- `answer_rag()` (sin streaming) devuelve `answer` + `sources` + `error`.
 
-### `src/router.py` — orquestador (LangGraph)
-- Estado tipado (`RouterState`) que va pasando por los nodos.
-- Nodos: `classify` → (`sql` y/o `rag`) → `synthesize`.
-- Aristas condicionales:
-  - tras `classify`: a `sql` si es `sql`/`mixta`, a `rag` si es `rag`.
-  - tras `sql`: a `rag` si era `mixta`, si no a `synthesize`.
-- `classify` normaliza la salida del LLM y, ante la duda, cae en `sql`.
-- `run_router()` es el **único** punto de entrada para la app y nunca lanza.
+### `src/router.py` — orquestador (Python puro)
+- `_classify(pregunta)`:
+  - Primero, **heurística de palabras clave**: si solo hay señales de datos →
+    `sql`; si solo hay señales documentales → `rag` (sin llamada al LLM).
+  - Si hay ambas o ninguna → **1 llamada al LLM** (prompt con ejemplos few-shot,
+    `max_tokens=8`). Ante fallo, cae en `mixta`/`sql`.
+- `prepare(pregunta)` → `(meta, tokens)`: ejecuta la parte lenta (clasificar +
+  SQL/recuperar) y devuelve un **generador** que emite la respuesta final en
+  streaming (explicar / responder / sintetizar según la ruta).
+- `run_router(pregunta)` → versión sin streaming (consume el generador). Es lo
+  que usan los tests y la CLI. Ninguna de las dos lanza excepción.
+- Ya **no usa LangGraph**: el flujo es lineal y cabe en `prepare()`.
 
 ### `app.py` — interfaz
 - Chat de Streamlit con historial en memoria de sesión.
-- Spinner "Pensando..." mientras corre `run_router`.
+- Spinner "Consultando..." mientras `prepare()` clasifica y consulta; después la
+  respuesta se **escribe en streaming** (`st.write_stream`), palabra a palabra.
 - Cada respuesta trae un desplegable con la ruta, el SQL y el documento fuente.
 - Barra lateral con la configuración activa (sin secretos) y botón de limpiar.
 
@@ -222,10 +233,12 @@ garantía última: aunque se colara un `DELETE`, SQL Server lo rechazaría.
 
 | Decisión | Alternativa descartada | Motivo |
 |---|---|---|
-| LLM por API (DeepSeek/OpenAI) | Modelo local | PoC en un PC; sin GPU potente. La API es barata y suficiente. |
+| LLM por API (OpenRouter/DeepSeek/OpenAI) | Modelo local | PoC en un PC; sin GPU potente. La API es barata y suficiente. |
 | Embeddings **locales** por defecto | Embeddings por API | Coste cero y sin enviar los documentos a un tercero. |
-| Herramientas SQL **propias** en vez del `SQLDatabaseToolkit` completo | Toolkit estándar de LangChain | Poder meter los guardrails **dentro** de la única herramienta que ejecuta SQL. |
-| Router con **LangGraph** | `if/else` a mano | El grafo deja explícito el flujo, es fácil añadir nodos (caché, reintentos, más fuentes). |
+| SQL en **2 llamadas** (generar + explicar), esquema fijo en el prompt | Agente **ReAct** con herramientas (`list_tables`/`describe_tables`/…) | El ReAct hacía 4-5 llamadas encadenadas → lento. Con el esquema en el prompt bastan 2. Se pierde algo de flexibilidad ante preguntas muy raras. |
+| Router en **Python plano** con heurística + 1 llamada | LangGraph | Flujo lineal; menos dependencias, arranque más rápido, sin llamada de clasificación cuando las palabras clave son claras. |
+| Respuesta final **en streaming** | Esperar y mostrarla entera | Con modelos lentos, ver texto en 1-2 s en vez de un spinner de 20 s. |
+| Prompts con "responde solo lo que se pregunta, sin análisis no pedido" | Dejar al modelo divagar | Respuestas más útiles y más cortas (menos tokens = menos coste y latencia). |
 | Chroma persistido en disco | Vector store en memoria | El índice sobrevive a reinicios; `ingest` se corre solo cuando cambian los docs. |
 | `AdventureWorksLT` | Base inventada | Datos realistas de ventas ya modelados; ahorra tiempo. |
 | Streamlit | API + front propio | Montar un chat funcional en minutos para validar la idea. |
@@ -257,9 +270,11 @@ calculado con una regla de política.
 - **Sin memoria entre sesiones.** El historial vive mientras la pestaña esté
   abierta.
 - **El router puede equivocar la ruta** en preguntas ambiguas; ante la duda va a
-  `sql`. Se corrige afinando los ejemplos del prompt.
-- **Coste y latencia.** El agente SQL hace varias llamadas al LLM por pregunta
-  (razonamiento ReAct). Con `deepseek-chat` / `gpt-4o-mini` es asumible.
+  `sql`. Se corrige afinando la heurística de palabras clave o los ejemplos del
+  prompt del clasificador.
+- **Coste y latencia.** Cada pregunta son 2-3 llamadas al LLM. Con modelos
+  `:free` de OpenRouter cada llamada tarda 15-40 s (infra compartida); con un
+  modelo de pago rápido (`gpt-4o-mini`, `deepseek-chat`) baja a 1-3 s.
 - **El timeout de consulta** depende del driver ODBC; no es un límite duro de
   SQL Server.
 - **Text-to-SQL no es infalible**: puede generar una consulta que corre pero
@@ -274,9 +289,9 @@ calculado con una regla de política.
 
 - **Memoria de conversación** en los agentes (pasar el historial al LLM).
 - **Re-ranking** en el RAG y troceado por secciones/encabezados.
-- **Caché** de preguntas frecuentes (nodo extra en el grafo).
+- **Caché** de preguntas frecuentes (antes de llamar al LLM).
 - **Métricas**: registrar acierto de ruta, latencia y coste por pregunta.
-- **Más fuentes**: un CRM, una hoja de cálculo, una API — se añaden como nodos.
+- **Más fuentes**: un CRM, una hoja de cálculo, una API — nuevas ramas en `prepare()`.
 - **Autenticación y despliegue** (contenedor de la app, no solo de la BD) cuando
   pase de PoC a piloto.
 - **Evaluación automática**: convertir `tests/preguntas_prueba.md` en un test
@@ -294,9 +309,10 @@ calculado con una regla de política.
 - **Vector store**: base de datos de vectores para buscar por similitud (Chroma).
 - **Text-to-SQL**: traducir una pregunta en lenguaje natural a una consulta SQL.
 - **Agente ReAct**: patrón en el que el LLM alterna *razonar* y *usar
-  herramientas* hasta tener la respuesta.
+  herramientas* en bucle. Esta PoC lo **sustituyó** por 2 llamadas fijas
+  (generar SQL + explicar) para ir más rápido.
+- **Streaming**: recibir y mostrar la respuesta del LLM token a token, en vez de
+  esperar a que termine.
 - **Router / orquestador**: la lógica que decide qué agente atiende cada
   pregunta.
 - **Guardrail**: validación que impide que el sistema haga algo no permitido.
-- **LangGraph**: librería para definir el flujo del agente como un grafo de
-  nodos y aristas.

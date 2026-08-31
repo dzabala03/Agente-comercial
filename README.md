@@ -7,8 +7,8 @@ Prueba de concepto de un agente conversacional para el equipo comercial que comb
 - **Text-to-SQL**: preguntas sobre datos estructurados (clientes, pedidos, ventas,
   productos) en **SQL Server**, en modo **solo lectura**.
 
-Un **router** (LangGraph) decide para cada pregunta si va al agente SQL, al RAG o
-a ambos, y compone la respuesta final. La interfaz es un chat en **Streamlit**.
+Un **router** decide para cada pregunta si va al agente SQL, al RAG o a ambos, y
+compone la respuesta final (en streaming). La interfaz es un chat en **Streamlit**.
 
 > Alcance de esta fase: uso local, un solo usuario, datos ficticios
 > (AdventureWorksLT). LLM por API externa (OpenRouter, DeepSeek u OpenAI; también
@@ -20,17 +20,17 @@ a ambos, y compone la respuesta final. La interfaz es un chat en **Streamlit**.
 
 ```
                  ┌──────────────────────────── app.py (Streamlit) ───────────────────────────┐
-   Usuario  ───▶ │  chat  ──▶  src/router.py  ──▶  clasifica: sql | rag | mixta               │
-                 │                     │                                                       │
+   Usuario  ───▶ │  chat  ──▶  router.prepare()  ──▶  _classify: sql | rag | mixta            │
+                 │                     │            (palabras clave, o 1 llamada al LLM)       │
                  │        ┌────────────┴───────────┐                                           │
                  │        ▼                        ▼                                           │
-                 │  src/sql_agent.py         src/rag_agent.py                                  │
-                 │  (ReAct + 3 tools)        (retriever + LLM)                                 │
+                 │  sql_agent.solve_sql       rag_agent.retrieve                               │
+                 │  1) LLM genera SELECT      busca en Chroma (data/chroma_db)                 │
+                 │  2) guardrails.validate ("solo SELECT" + TOP N + log)                       │
+                 │  3) ejecuta (usuario readonly)  ──▶  SQL Server 2025 (Docker)               │
                  │        │                        │                                          │
-                 │        ▼                        ▼                                          │
-                 │  guardrails.validate ──▶  SQL Server (solo lectura)   Chroma (data/chroma_db)│
-                 │                                                                             │
-                 │        └──────────▶  síntesis  ◀──────────┘  ──▶  respuesta + fuente/SQL    │
+                 │        └───▶ respuesta final: 1 llamada al LLM EN STREAMING ◀───┘           │
+                 │              (explicar / responder / sintetizar)  ──▶  texto + SQL/fuente   │
                  └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,7 +53,7 @@ Explicación detallada para el equipo: **[docs/GUIA-EQUIPO.md](docs/GUIA-EQUIPO.
 │   ├── sql_agent.py           # agente Text-to-SQL
 │   ├── rag_agent.py           # agente RAG
 │   ├── ingest.py              # indexado de documentos en Chroma (se corre a mano)
-│   └── router.py              # orquestador LangGraph (sql / rag / mixta)
+│   └── router.py              # orquestador: clasifica + streaming (sql / rag / mixta)
 ├── data/
 │   ├── docs/                  # documentos ficticios para el RAG
 │   ├── backups/               # aquí va AdventureWorksLT.bak

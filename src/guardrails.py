@@ -50,6 +50,13 @@ _STARTS_OK = re.compile(r"^\s*(SELECT|WITH)\b", re.IGNORECASE)
 _HAS_TOP = re.compile(r"^\s*SELECT\s+(DISTINCT\s+)?TOP\s*\(?\s*\d+", re.IGNORECASE)
 _HAS_FETCH = re.compile(r"\bOFFSET\b.+\bFETCH\b", re.IGNORECASE | re.DOTALL)
 
+# Consulta de agregado global (COUNT/SUM/... sin GROUP BY): devuelve 1 fila,
+# no tiene sentido inyectarle TOP.
+_BARE_AGG = re.compile(
+    r"^\s*SELECT\s+(COUNT|SUM|AVG|MIN|MAX)\s*\(", re.IGNORECASE
+)
+_HAS_GROUP_BY = re.compile(r"\bGROUP\s+BY\b", re.IGNORECASE)
+
 # Para inyectar TOP n justo después de SELECT [DISTINCT].
 _SELECT_PREFIX = re.compile(r"^(\s*SELECT\s+)(DISTINCT\s+)?", re.IGNORECASE)
 
@@ -124,6 +131,10 @@ def enforce_row_limit(sql: str, max_rows: int) -> str:
     SELECT final; se registra un aviso).
     """
     if _HAS_TOP.match(sql) or _HAS_FETCH.search(sql):
+        return sql
+
+    # Agregado global (SELECT COUNT(*) ... sin GROUP BY): ya devuelve una fila.
+    if _BARE_AGG.match(sql) and not _HAS_GROUP_BY.search(sql):
         return sql
 
     if re.match(r"^\s*WITH\b", sql, re.IGNORECASE):

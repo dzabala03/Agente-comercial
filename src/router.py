@@ -1,204 +1,191 @@
 """
 router.py
 =========
-Orquestador con LangGraph. Decide, para cada pregunta del usuario, si debe
-resolverla el agente SQL, el agente RAG, o ambos (pregunta mixta), y compone
-la respuesta final.
+Orquestador (Python puro, sin LangGraph). Clasifica la pregunta en
+`sql | rag | mixta` y produce la respuesta final EN STREAMING.
 
-Grafo:
+    prepare(pregunta)     -> (meta: dict, tokens: Iterable[str])
+                             meta = {route, queries, sources, error}
+                             tokens = generador que emite la respuesta final trozo a trozo
+    run_router(pregunta)  -> dict {route, answer, sources, queries, error}   (sin streaming)
 
-        (entrada)
-            |
-        [classify]  --sql-->  [sql] --------------------+
-            |  \                                        |
-            |   \--rag-->  [rag] ----------------------+ |
-            |                                          v v
-            \--mixta--> [sql] --> [rag] ----------> [synthesize] --> (fin)
-
-Función pública:
-    run_router(pregunta: str) -> dict con:
-        route      : "sql" | "rag" | "mixta"
-        answer     : respuesta final en lenguaje natural
-        sources    : documentos citados (RAG)
-        queries    : SQL ejecutado (SQL)
-        error      : str | None
+Llamadas al LLM por pregunta (frente a la versión ReAct anterior):
+    - sql   : clasificar(0-1) + generar SQL(1) + explicar(1)      ~2-3
+    - rag   : clasificar(0-1) + responder(1)                       ~1-2
+    - mixta : clasificar(1)   + generar SQL(1) + sintetizar(1)     ~3
+El clasificador se salta cuando las palabras clave son inequívocas.
 """
 from __future__ import annotations
 
-from typing import Optional, TypedDict
+import re
+from typing import Iterable, Iterator
 
-from langgraph.graph import END, StateGraph
+from langchain_core.prompts import ChatPromptTemplate
 
+from . import rag_agent, sql_agent
 from .config import get_llm, get_logger
-from .rag_agent import answer_rag
-from .sql_agent import answer_sql
 
 logger = get_logger("router")
 
-_VALID_ROUTES = {"sql", "rag", "mixta"}
+_VALID = {"sql", "rag", "mixta"}
 
 _CLASSIFIER_PROMPT = """\
-Clasifica la pregunta del usuario en UNA de estas categorías:
-
-- "sql"   : necesita datos de la base de datos comercial (clientes, pedidos,
-            ventas, productos, importes, cantidades, rankings, conteos...).
+Clasifica la pregunta del usuario en UNA categoría:
+- "sql"   : necesita datos de la base comercial (clientes, pedidos, ventas,
+            productos, importes, cantidades, rankings, conteos...).
 - "rag"   : se responde con documentos internos (políticas de descuento, de
             devoluciones, garantías, fichas de producto, procedimientos...).
-- "mixta" : necesita AMBOS: datos de la base Y contenido de un documento.
+- "mixta" : necesita AMBOS.
 
 Ejemplos:
-P: ¿Cuántos clientes tenemos en España?                      -> sql
-P: ¿Cuáles son los 5 productos más vendidos?                 -> sql
-P: ¿Cuál es la política de devoluciones?                     -> rag
-P: ¿Qué garantía tiene la bicicleta de montaña?             -> rag
-P: ¿Qué descuento máximo puedo aplicar al cliente que más   -> mixta
-   ha comprado este año?
-P: Dame el pipeline de ventas y recuérdame la política de    -> mixta
-   descuentos por volumen.
+¿Cuántos clientes hay en España?                          -> sql
+¿Cuáles son los 5 productos más vendidos?                 -> sql
+¿Cuál es la política de devoluciones?                     -> rag
+¿Qué garantía tiene la bici de montaña?                  -> rag
+¿Qué descuento máximo aplico al cliente que más compra?   -> mixta
 
-Responde SOLO con una palabra: sql, rag o mixta. Sin explicaciones.
-
+Responde SOLO con una palabra: sql, rag o mixta.
 PREGUNTA: {question}
 CATEGORÍA:"""
 
+# Atajos por palabras clave: si la señal es de un solo tipo, no gastamos una
+# llamada en clasificar.
+_DATA_HINTS = re.compile(
+    r"\b(cu[aá]nt[oa]s?|cu[aá]les?\s+son|top\s*\d|ranking|promedio|media|"
+    r"total(es)?\s+de|listad[oa]\s+de|n[uú]mero\s+de|pipeline|factura|"
+    r"pedidos?|ventas?|clientes?|productos?|importes?|comprad)\b",
+    re.I,
+)
+_DOC_HINTS = re.compile(
+    r"\b(pol[ií]tica|garant[ií]a|devoluci[oó]n|reembolso|descuento|bonificaci[oó]n|"
+    r"procedimiento|ficha|cat[aá]logo|rma|c[oó]mo\s+se|qu[eé]\s+dice|"
+    r"seg[uú]n\s+(el|la)\s+(documento|contrato|manual|pol[ií]tica))\b",
+    re.I,
+)
 
-class RouterState(TypedDict, total=False):
-    question: str
-    route: str
-    sql_result: dict
-    rag_result: dict
-    answer: str
-    sources: list
-    queries: list
-    error: Optional[str]
+_SYNTH_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "Respondes a un comercial combinando DATOS de la base y DOCUMENTOS "
+            "internos. Usa solo la información proporcionada.\n"
+            "Responde SOLO lo que se pregunta, de forma directa y breve. Sin "
+            "secciones de análisis, observaciones ni recomendaciones salvo que se "
+            "pidan. Sin emojis. En español. Cita el/los documento(s) usados entre "
+            "paréntesis al final.",
+        ),
+        (
+            "human",
+            "PREGUNTA: {question}\n\n"
+            "DATOS (resultado de `{sql}`):\n{rows}\n\n"
+            "DOCUMENTOS:\n{context}",
+        ),
+    ]
+)
 
 
-# --------------------------------------------------------------------------
-#  Nodos
-# --------------------------------------------------------------------------
-def _classify(state: RouterState) -> RouterState:
-    question = state["question"]
+def _classify(pregunta: str) -> str:
+    data = bool(_DATA_HINTS.search(pregunta))
+    doc = bool(_DOC_HINTS.search(pregunta))
+    if data and not doc:
+        return "sql"
+    if doc and not data:
+        return "rag"
     try:
-        raw = get_llm().invoke(_CLASSIFIER_PROMPT.format(question=question)).content
-        label = (raw or "").strip().lower()
-        # Normalización defensiva
-        for r in _VALID_ROUTES:
-            if r in label:
-                label = r
-                break
-        else:
-            label = "sql"  # por defecto, lo más seguro es intentar datos
-    except Exception:
-        logger.exception("Fallo del clasificador; se usa 'sql' por defecto")
-        label = "sql"
-
-    logger.info("Router: pregunta clasificada como '%s'", label)
-    return {"route": label}
-
-
-def _run_sql(state: RouterState) -> RouterState:
-    return {"sql_result": answer_sql(state["question"])}
-
-
-def _run_rag(state: RouterState) -> RouterState:
-    return {"rag_result": answer_rag(state["question"])}
-
-
-def _synthesize(state: RouterState) -> RouterState:
-    route = state["route"]
-    sql_res = state.get("sql_result") or {}
-    rag_res = state.get("rag_result") or {}
-
-    queries = sql_res.get("queries", [])
-    sources = rag_res.get("sources", [])
-    errors = [e for e in (sql_res.get("error"), rag_res.get("error")) if e]
-
-    if route == "sql":
-        answer = sql_res.get("answer", "")
-    elif route == "rag":
-        answer = rag_res.get("answer", "")
-    else:  # mixta -> combinar con el LLM
-        prompt = (
-            "Combina las dos respuestas parciales siguientes en UNA sola respuesta "
-            "coherente en español para un comercial. No repitas información.\n\n"
-            f"[Respuesta con datos de la base]\n{sql_res.get('answer','(sin datos)')}\n\n"
-            f"[Respuesta con documentos internos]\n{rag_res.get('answer','(sin datos)')}\n\n"
-            "RESPUESTA COMBINADA:"
+        raw = (
+            get_llm(reasoning=False)
+            .bind(max_tokens=8)
+            .invoke(_CLASSIFIER_PROMPT.format(question=pregunta))
+            .content
+            or ""
         )
-        try:
-            answer = get_llm().invoke(prompt).content
-        except Exception:
-            logger.exception("Fallo en la síntesis mixta; se concatenan las partes")
-            answer = (
-                f"{sql_res.get('answer','')}\n\n{rag_res.get('answer','')}"
-            ).strip()
-
-    return {
-        "answer": answer,
-        "sources": sources,
-        "queries": queries,
-        "error": "; ".join(errors) if errors else None,
-    }
+        low = raw.strip().lower()
+        for r in _VALID:
+            if r in low:
+                return r
+    except Exception:
+        logger.exception("Fallo del clasificador; se usa heurística")
+    return "mixta" if (data and doc) else "sql"
 
 
-def _after_classify(state: RouterState) -> str:
-    return "sql" if state["route"] in ("sql", "mixta") else "rag"
+def _stream(messages) -> Iterator[str]:
+    """Emite la respuesta final trozo a trozo (sin cadena de pensamiento)."""
+    try:
+        for chunk in get_llm(reasoning=False).stream(messages):
+            if chunk.content:
+                yield chunk.content
+    except Exception:  # pragma: no cover
+        logger.exception("Fallo al generar la respuesta")
+        yield "\n\n(Hubo un problema al generar la respuesta; revisa logs/agente.log.)"
 
 
-def _after_sql(state: RouterState) -> str:
-    return "rag" if state["route"] == "mixta" else "synthesize"
+def prepare(pregunta: str) -> tuple[dict, Iterable[str]]:
+    pregunta = (pregunta or "").strip()
+    meta = {"route": "sql", "queries": [], "sources": [], "error": None}
+    if not pregunta:
+        return meta, iter(["Escribe una pregunta."])
 
+    route = _classify(pregunta)
+    meta["route"] = route
+    logger.info("Router: pregunta clasificada como '%s'", route)
 
-# --------------------------------------------------------------------------
-#  Construcción del grafo (una sola vez)
-# --------------------------------------------------------------------------
-def _build_graph():
-    g = StateGraph(RouterState)
-    g.add_node("classify", _classify)
-    g.add_node("sql", _run_sql)
-    g.add_node("rag", _run_rag)
-    g.add_node("synthesize", _synthesize)
+    try:
+        if route == "rag":
+            context, sources = rag_agent.retrieve(pregunta)
+            meta["sources"] = sources
+            if not context:
+                return meta, iter(
+                    ["No tengo esa información en los documentos disponibles."]
+                )
+            return meta, _stream(rag_agent.answer_messages(pregunta, context))
 
-    g.set_entry_point("classify")
-    g.add_conditional_edges("classify", _after_classify, {"sql": "sql", "rag": "rag"})
-    g.add_conditional_edges("sql", _after_sql, {"rag": "rag", "synthesize": "synthesize"})
-    g.add_edge("rag", "synthesize")
-    g.add_edge("synthesize", END)
-    return g.compile()
+        # --- sql o mixta: primero resolvemos el SQL ---
+        s = sql_agent.solve_sql(pregunta)
+        if s["sql"]:
+            meta["queries"] = [s["sql"]]
+        if s["blocked"]:
+            return meta, iter([sql_agent.BLOCKED_MSG])
+        if s["error"]:
+            meta["error"] = s["error"]
 
+        if route == "sql":
+            if s["error"]:
+                return meta, iter(
+                    ["No pude ejecutar la consulta contra la base de datos."]
+                )
+            return meta, _stream(
+                sql_agent.explain_messages(pregunta, s["sql"], s["rows"])
+            )
 
-_graph = None
+        # --- mixta: añadimos los documentos y sintetizamos ---
+        context, sources = rag_agent.retrieve(pregunta)
+        meta["sources"] = sources
+        rows = "(sin datos)" if s["error"] else (s["rows"] or "(sin filas)")
+        msgs = _SYNTH_PROMPT.format_messages(
+            question=pregunta,
+            sql=s["sql"] or "-",
+            rows=rows,
+            context=context or "(sin documentos relevantes)",
+        )
+        return meta, _stream(msgs)
+
+    except Exception as exc:  # pragma: no cover
+        logger.exception("Fallo global del router")
+        meta["error"] = str(exc)
+        return meta, iter(["Ocurrió un error procesando la pregunta."])
 
 
 def run_router(pregunta: str) -> dict:
-    """Punto de entrada único para la app. Nunca lanza: los errores van en 'error'."""
-    global _graph
-    if _graph is None:
-        _graph = _build_graph()
-
-    pregunta = (pregunta or "").strip()
-    if not pregunta:
-        return {"route": "sql", "answer": "Escribe una pregunta.", "sources": [],
-                "queries": [], "error": None}
-
-    try:
-        final = _graph.invoke({"question": pregunta})
-        return {
-            "route": final.get("route", "sql"),
-            "answer": final.get("answer", "Sin respuesta."),
-            "sources": final.get("sources", []),
-            "queries": final.get("queries", []),
-            "error": final.get("error"),
-        }
-    except Exception as exc:  # pragma: no cover
-        logger.exception("Fallo global del router")
-        return {
-            "route": "sql",
-            "answer": "Ocurrió un error procesando la pregunta. Revisa logs/agente.log.",
-            "sources": [],
-            "queries": [],
-            "error": str(exc),
-        }
+    """Punto de entrada sin streaming (tests, CLI). Nunca lanza."""
+    meta, tokens = prepare(pregunta)
+    answer = "".join(tokens)
+    return {
+        "route": meta["route"],
+        "answer": answer or "Sin respuesta.",
+        "sources": meta["sources"],
+        "queries": meta["queries"],
+        "error": meta["error"],
+    }
 
 
 if __name__ == "__main__":

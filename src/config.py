@@ -186,17 +186,26 @@ def get_logger(name: str) -> logging.Logger:
 #  Fábricas de objetos compartidos
 # --------------------------------------------------------------------------
 @lru_cache(maxsize=None)
-def get_llm(temperature: float = 0.0):
-    """Devuelve un cliente de chat LangChain configurado para el proveedor elegido."""
+def get_llm(temperature: float = 0.0, reasoning: bool = True):
+    """
+    Cliente de chat LangChain para el proveedor elegido.
+
+    reasoning=False  -> pide al proveedor que NO emita cadena de pensamiento.
+      Se usa en las llamadas de "explicar / clasificar / sintetizar", donde no
+      hace falta razonar y sí interesa que sea rápido y conciso. Solo tiene
+      efecto en OpenRouter (parámetro unificado 'reasoning').
+    """
     from langchain_openai import ChatOpenAI
 
-    # OpenRouter usa estas cabeceras (opcionales) para atribución/ranking.
-    extra_headers = {}
+    default_headers: dict | None = None
+    extra_body: dict | None = None
     if LLM_PROVIDER == "openrouter":
-        extra_headers = {
+        default_headers = {
             "HTTP-Referer": _opt("OPENROUTER_APP_URL", "http://localhost:8501"),
             "X-Title": _opt("OPENROUTER_APP_TITLE", "Agente Comercial PoC"),
         }
+        if not reasoning:
+            extra_body = {"reasoning": {"enabled": False}}
 
     return ChatOpenAI(
         model=LLM_MODEL,
@@ -205,7 +214,8 @@ def get_llm(temperature: float = 0.0):
         temperature=temperature,
         timeout=60,
         max_retries=2,
-        default_headers=extra_headers or None,
+        default_headers=default_headers,
+        extra_body=extra_body,
     )
 
 

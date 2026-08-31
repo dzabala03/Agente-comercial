@@ -3,17 +3,13 @@ rag_agent.py
 ============
 Agente de recuperación (RAG) sobre los documentos indexados en Chroma.
 
-Flujo:
-    pregunta -> retriever (top-k fragmentos) -> LLM con contexto -> respuesta citando fuente
-
-Función pública:
-    answer_rag(pregunta: str) -> dict con:
-        answer   : respuesta en lenguaje natural (o admisión de que no hay info)
-        sources  : lista de nombres de documento usados como contexto
-        error    : str | None
+    retrieve(pregunta)              -> (context: str, sources: list[str])
+    answer_messages(preg, context) -> list[BaseMessage]     (para streaming en el router)
+    answer_rag(pregunta)           -> dict {answer, sources, error}   (sin streaming)
 """
 from __future__ import annotations
 
+from langchain_core.messages import BaseMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
@@ -33,25 +29,21 @@ _PROMPT = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "Eres un asistente para el equipo comercial. Respondes ÚNICAMENTE con la "
-            "información del CONTEXTO que se te proporciona (extractos de documentos "
-            "internos).\n"
-            "Reglas:\n"
-            "1. Si el contexto no contiene la respuesta, di exactamente: "
-            "\"No tengo esa información en los documentos disponibles.\" No inventes.\n"
-            "2. Responde en español, de forma clara y concisa.\n"
-            "3. Al final, cita entre paréntesis el/los documento(s) de donde sacaste "
-            "la información, usando el nombre de archivo.\n",
+            "Eres un asistente para el equipo comercial. Respondes ÚNICAMENTE con "
+            "la información del CONTEXTO (extractos de documentos internos).\n"
+            "- Si el contexto no contiene la respuesta, di exactamente: \"No tengo "
+            "esa información en los documentos disponibles.\" No inventes.\n"
+            "- Cita entre paréntesis, al final, el/los archivo(s) de donde sale la "
+            "información.\n"
+            "- Responde SOLO lo que se pregunta, de forma directa y breve. Sin "
+            "secciones de análisis, observaciones ni recomendaciones salvo que se "
+            "pidan. Sin emojis. En español.",
         ),
-        (
-            "human",
-            "CONTEXTO:\n{context}\n\n---\nPREGUNTA: {question}",
-        ),
+        ("human", "CONTEXTO:\n{context}\n\n---\nPREGUNTA: {question}"),
     ]
 )
 
 _retriever = None
-_chain = None
 
 
 def _get_retriever():
@@ -72,7 +64,6 @@ def _get_retriever():
             logger.warning(
                 "El índice Chroma está vacío. Ejecuta 'python -m src.ingest' primero."
             )
-        # No pedir más fragmentos de los que hay (evita warnings con corpus pequeño).
         k = TOP_K if count < 0 else max(1, min(TOP_K, count))
         _retriever = store.as_retriever(search_kwargs={"k": k})
     return _retriever
@@ -86,35 +77,38 @@ def _format_context(docs) -> str:
     return "\n\n".join(blocks)
 
 
-def _get_chain():
-    global _chain
-    if _chain is None:
-        _chain = _PROMPT | get_llm() | StrOutputParser()
-    return _chain
+def retrieve(pregunta: str) -> tuple[str, list[str]]:
+    """Recupera los fragmentos relevantes. Devuelve (contexto_formateado, fuentes)."""
+    docs = _get_retriever().invoke(pregunta)
+    if not docs:
+        return "", []
+    sources = sorted({d.metadata.get("source", "desconocido") for d in docs})
+    return _format_context(docs), sources
+
+
+def answer_messages(pregunta: str, context: str) -> list[BaseMessage]:
+    return _PROMPT.format_messages(context=context, question=pregunta)
 
 
 def answer_rag(pregunta: str) -> dict:
-    """Responde una pregunta documental. No lanza excepciones."""
+    """Versión sin streaming. No lanza excepciones."""
     logger.info("Pregunta RAG: %s", pregunta)
     try:
-        docs = _get_retriever().invoke(pregunta)
-        if not docs:
+        context, sources = retrieve(pregunta)
+        if not context:
             return {
                 "answer": "No tengo esa información en los documentos disponibles.",
                 "sources": [],
                 "error": None,
             }
-        context = _format_context(docs)
-        answer = _get_chain().invoke({"context": context, "question": pregunta})
-        sources = sorted({d.metadata.get("source", "desconocido") for d in docs})
+        answer = (get_llm(reasoning=False) | StrOutputParser()).invoke(
+            answer_messages(pregunta, context)
+        )
         return {"answer": answer, "sources": sources, "error": None}
     except Exception as exc:  # pragma: no cover
         logger.exception("Fallo en answer_rag")
         return {
-            "answer": (
-                "Hubo un problema al consultar los documentos. "
-                "Revisa logs/agente.log para el detalle."
-            ),
+            "answer": "Hubo un problema al consultar los documentos.",
             "sources": [],
             "error": str(exc),
         }
