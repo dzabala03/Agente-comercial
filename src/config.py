@@ -52,16 +52,20 @@ def _opt(name: str, default: str = "") -> str:
 LLM_PROVIDER = _opt("LLM_PROVIDER", "deepseek").lower()
 LLM_MODEL = _opt("LLM_MODEL", "deepseek-chat")
 
-# base_url según proveedor (ambos hablan el protocolo estilo OpenAI)
+# base_url según proveedor (todos hablan el protocolo estilo OpenAI)
 _LLM_BASE_URLS = {
     "deepseek": "https://api.deepseek.com",
     "openai": None,  # SDK usa el endpoint por defecto
+    "openrouter": "https://openrouter.ai/api/v1",
+    "ollama": "http://localhost:11434/v1",
 }
 if LLM_PROVIDER not in _LLM_BASE_URLS:
     raise RuntimeError(
-        f"LLM_PROVIDER='{LLM_PROVIDER}' no soportado. Usa 'deepseek' u 'openai'."
+        f"LLM_PROVIDER='{LLM_PROVIDER}' no soportado. "
+        f"Usa uno de: {', '.join(_LLM_BASE_URLS)}."
     )
-LLM_BASE_URL = _LLM_BASE_URLS[LLM_PROVIDER]
+# LLM_BASE_URL del .env tiene prioridad (permite endpoints self-host o proxys).
+LLM_BASE_URL = _opt("LLM_BASE_URL") or _LLM_BASE_URLS[LLM_PROVIDER]
 
 # --------------------------------------------------------------------------
 #  Embeddings
@@ -163,6 +167,14 @@ def get_llm(temperature: float = 0.0):
     """Devuelve un cliente de chat LangChain configurado para el proveedor elegido."""
     from langchain_openai import ChatOpenAI
 
+    # OpenRouter usa estas cabeceras (opcionales) para atribución/ranking.
+    extra_headers = {}
+    if LLM_PROVIDER == "openrouter":
+        extra_headers = {
+            "HTTP-Referer": _opt("OPENROUTER_APP_URL", "http://localhost:8501"),
+            "X-Title": _opt("OPENROUTER_APP_TITLE", "Agente Comercial PoC"),
+        }
+
     return ChatOpenAI(
         model=LLM_MODEL,
         api_key=_req("LLM_API_KEY"),
@@ -170,6 +182,7 @@ def get_llm(temperature: float = 0.0):
         temperature=temperature,
         timeout=60,
         max_retries=2,
+        default_headers=extra_headers or None,
     )
 
 
@@ -257,6 +270,7 @@ def describe_runtime() -> dict:
     return {
         "LLM_PROVIDER": LLM_PROVIDER,
         "LLM_MODEL": LLM_MODEL,
+        "LLM_BASE_URL": LLM_BASE_URL or "(por defecto del SDK)",
         "EMBEDDING_PROVIDER": EMBEDDING_PROVIDER,
         "SQL_SERVER": f"{SQL_SERVER_HOST}:{SQL_SERVER_PORT}/{SQL_SERVER_DB}",
         "SQL_SERVER_USER": SQL_SERVER_USER,

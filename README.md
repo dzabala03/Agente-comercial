@@ -11,7 +11,8 @@ Un **router** (LangGraph) decide para cada pregunta si va al agente SQL, al RAG 
 a ambos, y compone la respuesta final. La interfaz es un chat en **Streamlit**.
 
 > Alcance de esta fase: uso local, un solo usuario, datos ficticios
-> (AdventureWorksLT). LLM por API externa (DeepSeek u OpenAI), no autoalojado.
+> (AdventureWorksLT). LLM por API externa (OpenRouter, DeepSeek u OpenAI; también
+> Ollama local), no autoalojado.
 
 ---
 
@@ -78,7 +79,7 @@ El paso a paso completo, con lo que tienes que hacer tú y cómo, está en
 **[docs/PUESTA-EN-MARCHA.md](docs/PUESTA-EN-MARCHA.md)**. Resumen:
 
 1. **Prerrequisitos**: Python 3.11+, Docker Desktop, "ODBC Driver 18 for SQL
-   Server", una API key de DeepSeek u OpenAI.
+   Server", una API key de LLM (OpenRouter con modelos `:free`, DeepSeek u OpenAI).
 2. **Base de datos**: `docker compose up -d` → restaurar `AdventureWorksLT.bak`
    (`scripts/restore_db.ps1`) → crear usuario de solo lectura
    (`sql/01_crear_usuario_readonly.sql`).

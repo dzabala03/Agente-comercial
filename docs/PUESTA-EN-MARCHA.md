@@ -63,10 +63,13 @@ existe) y `venv/` (no se sube). El archivo `.env.example` **sí** se sube.
 
 Elige **uno**:
 
-- **DeepSeek** (más barato): crea cuenta en https://platform.deepseek.com/ →
-  "API Keys" → genera una. Modelo a usar: `deepseek-chat`.
-- **OpenAI**: https://platform.openai.com/ → "API Keys". Modelo sugerido:
-  `gpt-4o-mini`.
+- **OpenRouter** (gratis con modelos `:free`): https://openrouter.ai/ → "Keys" →
+  crea una (empieza por `sk-or-v1-...`). Modelo: `deepseek/deepseek-chat-v3-0324:free`
+  (verifica el slug vigente en https://openrouter.ai/models?q=deepseek+free).
+  Límite: ~20 req/min y un tope diario; suficiente para un usuario probando.
+- **DeepSeek** (de pago pero céntimos): https://platform.deepseek.com/ → "API Keys".
+  Modelo: `deepseek-chat`.
+- **OpenAI**: https://platform.openai.com/ → "API Keys". Modelo: `gpt-4o-mini`.
 
 Guarda la clave, la pegarás en `.env` en el paso 4.
 
@@ -178,14 +181,17 @@ notepad .env
 
 Rellena:
 
-| Variable | Valor |
+| Variable | Valor (ejemplo con OpenRouter) |
 |---|---|
-| `LLM_PROVIDER` | `deepseek` o `openai` |
-| `LLM_API_KEY` | tu API key del paso 1 |
-| `LLM_MODEL` | `deepseek-chat` o `gpt-4o-mini` |
-| `EMBEDDING_PROVIDER` | `local` (recomendado; sin coste) |
+| `LLM_PROVIDER` | `openrouter` |
+| `LLM_API_KEY` | tu clave `sk-or-v1-...` del paso 1 |
+| `LLM_MODEL` | `deepseek/deepseek-chat-v3-0324:free` |
+| `EMBEDDING_PROVIDER` | `local` (obligatorio con OpenRouter; no da embeddings) |
 | `SQL_SERVER_PASSWORD` | la contraseña de `agente_readonly` (paso 2.5) |
 | resto de `SQL_SERVER_*` | ya vienen bien por defecto |
+
+Si un modelo `:free` te da errores de saturación ("rate limited" / 429), prueba
+otro slug free (`deepseek/deepseek-r1:free`) o espera unos segundos entre preguntas.
 
 ✅ Comprobación de configuración:
 
