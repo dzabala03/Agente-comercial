@@ -1,0 +1,29 @@
+# --- Secretos / entorno ---
+.env
+*.env
+!.env.example
+
+# --- Python ---
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# --- Datos generados ---
+data/chroma_db/
+!data/chroma_db/.gitkeep
+logs/*.log
+!logs/.gitkeep
+
+# --- Editor / SO ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Modelos descargados por fastembed ---
+.cache/

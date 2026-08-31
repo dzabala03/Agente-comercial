@@ -1,0 +1,2 @@
+# Coloca aquí AdventureWorksLT.bak antes de restaurar la base de datos.
+# Esta carpeta se monta dentro del contenedor en /var/opt/mssql/backups

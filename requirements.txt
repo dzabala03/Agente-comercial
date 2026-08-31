@@ -1,0 +1,36 @@
+# ============================================================================
+#  Dependencias del Agente RAG + SQL (PoC)
+#  Instalar con:  pip install -r requirements.txt
+#
+#  Se fijan versiones "compatible release" (~=) para reproducibilidad.
+#  Si el resolver de pip diera un conflicto irresoluble en tu máquina,
+#  quita los pines de la sección "LLM / orquestación" y deja que pip
+#  elija (documentar en el README qué versiones quedaron).
+# ============================================================================
+
+# --- LLM / orquestación ---------------------------------------------------
+langchain~=0.3.27
+langchain-text-splitters~=0.3.5
+langchain-community~=0.3.27
+langchain-openai~=0.3.0
+langchain-chroma~=0.2.0
+langgraph~=0.3.5
+
+# --- Vector store / embeddings ------------------------------------------
+chromadb~=0.5.23
+fastembed~=0.4.2
+
+# --- SQL Server --------------------------------------------------------
+pyodbc~=5.2.0
+SQLAlchemy~=2.0.36
+
+# --- Carga de documentos para el RAG ---------------------------------
+pypdf~=5.1.0
+docx2txt~=0.8
+
+# --- Interfaz --------------------------------------------------------
+streamlit~=1.41
+
+# --- Utilidades ----------------------------------------------------
+python-dotenv~=1.0.1
+tiktoken~=0.8.0

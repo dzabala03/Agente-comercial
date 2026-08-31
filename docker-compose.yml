@@ -1,0 +1,37 @@
+# ============================================================================
+#  SQL Server 2022 (Developer Edition) para la PoC del agente.
+#  Uso:
+#     docker compose up -d        # levantar
+#     docker compose ps           # ver estado
+#     docker compose down         # parar (los datos se conservan en el volumen)
+#     docker compose down -v      # parar y BORRAR los datos
+#
+#  La contraseña de 'sa' se toma de la variable MSSQL_SA_PASSWORD del .env
+#  (o del entorno). Debe tener >= 8 caracteres, con mayúscula, minúscula,
+#  número y símbolo, o SQL Server no arranca.
+# ============================================================================
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: agente_sqlserver
+    hostname: agente-sqlserver
+    ports:
+      - "1433:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?Define MSSQL_SA_PASSWORD en tu .env}"
+      MSSQL_PID: "Developer"
+    volumes:
+      - mssql_data:/var/opt/mssql
+      - ./data/backups:/var/opt/mssql/backups
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  mssql_data:
+    name: agente_mssql_data

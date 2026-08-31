@@ -1,0 +1,35 @@
+POLÍTICA DE DEVOLUCIONES Y GARANTÍA
+Documento interno. Versión 3.0 — vigente desde el 15 de enero de 2026.
+
+1. PLAZO DE DEVOLUCIÓN
+- El distribuidor dispone de 30 días naturales desde la recepción de la mercancía
+  para solicitar una devolución por desistimiento.
+- Pasados 30 días no se aceptan devoluciones por desistimiento, solo por garantía.
+
+2. CONDICIONES DE LA MERCANCÍA DEVUELTA
+- Producto sin usar, en su embalaje original y con todos los accesorios.
+- Se admite hasta un 10 % del valor del pedido en devolución sin penalización.
+- Por encima del 10 %, se aplica un cargo de reposición del 8 % sobre el exceso.
+
+3. PROCEDIMIENTO
+- Solicitar número RMA al departamento de posventa (posventa@empresa.example).
+- El RMA debe indicarse en el albarán de devolución.
+- El transporte de devolución por desistimiento corre a cargo del distribuidor.
+- El transporte por garantía o error de envío corre a cargo de la empresa.
+
+4. GARANTÍA
+- Plazo general: 2 años desde la fecha de factura para componentes.
+- Cuadros de bicicleta: 5 años contra defectos de fabricación.
+- Quedan excluidos: desgaste normal (neumáticos, pastillas, cadena, cables),
+  daños por caída, uso en competición, modificaciones no autorizadas y falta de
+  mantenimiento.
+
+5. PLAZOS DE RESOLUCIÓN
+- Confirmación de recepción del RMA: 2 días laborables.
+- Resolución de garantía (reparar, sustituir o abonar): 15 días laborables desde
+  la recepción del producto en almacén.
+- Abono, si procede: en la siguiente liquidación mensual.
+
+6. REEMPLAZOS EXPRÉS
+Para clientes con más de 50.000 EUR de compra anual, la empresa ofrece envío
+del recambio antes de recibir la pieza defectuosa, previa aceptación del RMA.
