@@ -30,9 +30,12 @@ GO
 ALTER ROLE [db_datareader] ADD MEMBER [agente_readonly];
 GO
 
--- 4. Denegar explícitamente escritura y ejecución (defensa en profundidad)
-DENY EXECUTE           TO [agente_readonly];
-DENY INSERT, UPDATE, DELETE, ALTER, CONTROL, REFERENCES TO [agente_readonly];
+-- 4. Denegar explícitamente escritura y ejecución (defensa en profundidad).
+--    OJO: NO denegar CONTROL a nivel de base de datos: CONTROL es un permiso
+--    "paraguas" y un DENY CONTROL bloquea incluso la conexión a la BD
+--    ("Cannot open database ... requested by the login").
+DENY INSERT, UPDATE, DELETE TO [agente_readonly];
+DENY EXECUTE TO [agente_readonly];
 GO
 
 PRINT 'Usuario agente_readonly listo con permisos de solo lectura.';

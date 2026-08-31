@@ -102,15 +102,19 @@ docker compose ps
 
 ### 2.3 Descargar la base de muestra 🧑‍💻
 
-Descarga **`AdventureWorksLT2022.bak`** desde:
+Descarga el `.bak` de **AdventureWorksLT** desde:
 https://learn.microsoft.com/sql/samples/adventureworks-install-configure
-(sección "Download backup files" → *AdventureWorksLT2022.bak*).
+(sección "Download backup files").
 
-Cópialo a la carpeta del repo y renómbralo:
+Cópialo a la carpeta del repo con **este nombre exacto**:
 
 ```powershell
-Copy-Item "$HOME\Downloads\AdventureWorksLT2022.bak" ".\data\backups\AdventureWorksLT.bak"
+Copy-Item "$HOME\Downloads\AdventureWorksLT*.bak" ".\data\backups\AdventureWorksLT.bak"
 ```
+
+> El `.bak` que publica Microsoft ahora está tomado en **SQL Server 2025**, por eso
+> `docker-compose.yml` usa la imagen `mssql/server:2025-latest`. Un `.bak` no se
+> puede restaurar en una versión de SQL Server anterior a la que lo generó.
 
 ### 2.4 Restaurar la base ⚙️
 
@@ -137,11 +141,17 @@ El script lee los nombres lógicos del `.bak`, restaura la base como
      (o Encrypt = false). Acepta la descarga del driver JDBC si te la ofrece.
    - Abre un editor SQL sobre esa conexión (icono "SQL" o Ctrl+]).
 2. Abre `sql/01_crear_usuario_readonly.sql`, **cambia** `CAMBIA_esta_password_1!`
-   por una contraseña real y ejecútalo (F5).
-3. Anota esa contraseña: va en `.env` como `SQL_SERVER_PASSWORD`.
-4. Verifica: reconéctate ahora como `agente_readonly` y ejecuta
-   `sql/02_smoke_test.sql`. Las tres primeras consultas deben funcionar; si
-   descomentas el `UPDATE` del final, **debe** dar error de permisos.
+   por la misma contraseña que pusiste en `.env` → `SQL_SERVER_PASSWORD`, y
+   ejecútalo (F5 por lote, o Alt+X todo el script).
+   - Alternativa sin GUI: `docker exec -i agente_sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "<MSSQL_SA_PASSWORD>" -C < sql/01_crear_usuario_readonly.sql`
+3. Verifica: reconéctate como `agente_readonly` y ejecuta `sql/02_smoke_test.sql`.
+   Las tres primeras consultas funcionan; si descomentas el `UPDATE` del final,
+   **debe** dar `The UPDATE permission was denied`.
+
+> Importante: **no** añadas `DENY CONTROL` a nivel de base de datos al usuario de
+> solo lectura. `CONTROL` es un permiso paraguas y un `DENY CONTROL` impide
+> incluso abrir la base (`Cannot open database ... requested by the login`).
+> `db_datareader` + `DENY INSERT, UPDATE, DELETE, EXECUTE` es suficiente.
 
 ✅ Puedes ejecutar un `SELECT` como `agente_readonly` y el `UPDATE` te lo deniega.
 

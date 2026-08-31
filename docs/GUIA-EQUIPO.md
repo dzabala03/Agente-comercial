@@ -83,7 +83,7 @@ Componentes externos:
 |---|---|---|
 | **LLM** (DeepSeek u OpenAI) | Clasificar, generar SQL, redactar respuestas | API externa (de pago por uso) |
 | **Embeddings** | Convertir texto en vectores para la búsqueda del RAG | Local (`fastembed`, sin coste) o API OpenAI |
-| **SQL Server 2022** | Almacén de datos estructurados | Contenedor Docker en el PC |
+| **SQL Server 2025** | Almacén de datos estructurados | Contenedor Docker en el PC |
 | **Chroma** | Vector store del RAG (persistido en disco) | Carpeta `data/chroma_db/` |
 | **Streamlit** | Interfaz de chat | Proceso local, `localhost:8501` |
 

@@ -43,7 +43,7 @@ Explicación detallada para el equipo: **[docs/GUIA-EQUIPO.md](docs/GUIA-EQUIPO.
 ```
 .
 ├── app.py                     # interfaz Streamlit (punto de entrada)
-├── docker-compose.yml         # SQL Server 2022 en contenedor
+├── docker-compose.yml         # SQL Server 2025 en contenedor
 ├── requirements.txt           # dependencias de ejecución
 ├── requirements-dev.txt       # + pytest
 ├── .env.example               # plantilla de variables de entorno

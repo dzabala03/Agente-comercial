@@ -1,5 +1,8 @@
 # ============================================================================
-#  SQL Server 2022 (Developer Edition) para la PoC del agente.
+#  SQL Server 2025 (Developer Edition) para la PoC del agente.
+#  Nota: usamos 2025 porque el backup AdventureWorksLT.bak que publica Microsoft
+#  está tomado en SQL Server 2025 y no se puede restaurar en 2022 (versión
+#  incompatible). Si tu .bak fuera de 2022, cambia la imagen a 2022-latest.
 #  Uso:
 #     docker compose up -d        # levantar
 #     docker compose ps           # ver estado
@@ -12,7 +15,7 @@
 # ============================================================================
 services:
   sqlserver:
-    image: mcr.microsoft.com/mssql/server:2022-latest
+    image: mcr.microsoft.com/mssql/server:2025-latest
     container_name: agente_sqlserver
     hostname: agente-sqlserver
     ports:
