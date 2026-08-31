@@ -195,13 +195,19 @@ Rellena:
 |---|---|
 | `LLM_PROVIDER` | `openrouter` |
 | `LLM_API_KEY` | tu clave `sk-or-v1-...` del paso 1 |
-| `LLM_MODEL` | `deepseek/deepseek-chat-v3-0324:free` |
+| `LLM_MODEL` | `minimax/minimax-m3:free` (probado OK con este proyecto) |
 | `EMBEDDING_PROVIDER` | `local` (obligatorio con OpenRouter; no da embeddings) |
 | `SQL_SERVER_PASSWORD` | la contraseña de `agente_readonly` (paso 2.5) |
 | resto de `SQL_SERVER_*` | ya vienen bien por defecto |
 
-Si un modelo `:free` te da errores de saturación ("rate limited" / 429), prueba
-otro slug free (`deepseek/deepseek-r1:free`) o espera unos segundos entre preguntas.
+Los modelos `:free` de OpenRouter **rotan**: si ves un 404 *"unavailable for free"*
+o errores 429 de saturación, elige otro slug gratis (que soporte *tools*) en
+https://openrouter.ai/models?order=pricing-low-to-high&max_price=0 y actualiza
+`LLM_MODEL`. Para listar los que hay ahora mismo:
+
+```powershell
+.\venv\Scripts\python.exe -c "import json,urllib.request as u; from src.config import _opt; d=json.load(u.urlopen(u.Request('https://openrouter.ai/api/v1/models',headers={'Authorization':'Bearer '+_opt('LLM_API_KEY')})))['data']; [print(m['id']) for m in d if str(m['pricing']['prompt']) in ('0','0.0')]"
+```
 
 ✅ Comprobación de configuración:
 

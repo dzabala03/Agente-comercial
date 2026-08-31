@@ -18,11 +18,32 @@ import logging
 import os
 import sys
 import urllib.parse
+import warnings
 from functools import lru_cache
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+# --------------------------------------------------------------------------
+#  Silenciar ruido de librerías de terceros (antes de importarlas)
+# --------------------------------------------------------------------------
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")   # Chroma
+os.environ.setdefault("CHROMA_TELEMETRY", "False")
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+warnings.filterwarnings("ignore", message=r".*was not located in columns.*")
+warnings.filterwarnings("ignore", message=r".*allowed_objects.*")
+
+# Consola en UTF-8 (Windows abre cp1252 por defecto y las respuestas del LLM
+# suelen traer acentos o emojis que romperían el print).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # --------------------------------------------------------------------------
 #  Carga del .env
@@ -148,8 +169,10 @@ def setup_logging() -> None:
     root.addHandler(file_handler)
 
     # Bajar ruido de librerías de terceros
-    for noisy in ("httpx", "urllib3", "chromadb", "openai", "httpcore"):
+    for noisy in ("httpx", "urllib3", "openai", "httpcore", "huggingface_hub"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    # Chroma emite errores de telemetría inofensivos (bug conocido de posthog)
+    logging.getLogger("chromadb.telemetry").setLevel(logging.CRITICAL)
 
     _LOGGING_READY = True
 

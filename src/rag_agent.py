@@ -72,7 +72,9 @@ def _get_retriever():
             logger.warning(
                 "El índice Chroma está vacío. Ejecuta 'python -m src.ingest' primero."
             )
-        _retriever = store.as_retriever(search_kwargs={"k": TOP_K})
+        # No pedir más fragmentos de los que hay (evita warnings con corpus pequeño).
+        k = TOP_K if count < 0 else max(1, min(TOP_K, count))
+        _retriever = store.as_retriever(search_kwargs={"k": k})
     return _retriever
 
 
