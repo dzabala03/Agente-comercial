@@ -15,6 +15,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from .config import (
     CHROMA_COLLECTION,
+    CHROMA_COLLECTION_METADATA,
     CHROMA_PERSIST_DIR,
     get_embeddings,
     get_llm,
@@ -23,11 +24,18 @@ from .config import (
 
 logger = get_logger("rag_agent")
 
-TOP_K = 6
-# MMR: de un primer conjunto amplio (FETCH_K) elige TOP_K diversos, evitando
-# devolver varios fragmentos casi idénticos cuando un término se repite.
-FETCH_K = 25
-MMR_LAMBDA = 0.5
+TOP_K = 5            # máximo de fragmentos que se pasan al LLM
+FETCH_K = 25         # candidatos que se piden a Chroma antes de filtrar
+# El modelo e5 acierta el ranking pero comprime las distancias (0.13-0.21), así
+# que el filtro es RELATIVO al mejor fragmento, no absoluto:
+#   - ABS_CEILING: si ni el mejor baja de aquí, no hay nada relevante -> sin
+#     contexto (el LLM responde "no tengo esa información").
+#   - CONTEXT_RATIO: fragmentos que ve el LLM (algo de margen).
+#   - CITE_RATIO: fuentes que se muestran como cita (más estricto, para no
+#     citar el PDF de privacidad cuando solo se ha colado de relleno).
+ABS_CEILING = 0.19
+CONTEXT_RATIO = 1.20
+CITE_RATIO = 1.08
 
 _PROMPT = ChatPromptTemplate.from_messages(
     [
@@ -47,37 +55,28 @@ _PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
-_retriever = None
+_store = None
 
 
-def _get_retriever():
-    global _retriever
-    if _retriever is None:
+def _get_store():
+    global _store
+    if _store is None:
         from langchain_chroma import Chroma
 
-        store = Chroma(
+        _store = Chroma(
             collection_name=CHROMA_COLLECTION,
             embedding_function=get_embeddings(),
             persist_directory=CHROMA_PERSIST_DIR,
+            collection_metadata=CHROMA_COLLECTION_METADATA,
         )
         try:
-            count = store._collection.count()
+            if _store._collection.count() == 0:
+                logger.warning(
+                    "El índice Chroma está vacío. Ejecuta 'python -m src.ingest'."
+                )
         except Exception:
-            count = -1
-        if count == 0:
-            logger.warning(
-                "El índice Chroma está vacío. Ejecuta 'python -m src.ingest' primero."
-            )
-        if count < 0:
-            k, fetch_k = TOP_K, FETCH_K
-        else:
-            k = max(1, min(TOP_K, count))
-            fetch_k = max(k, min(FETCH_K, count))
-        _retriever = store.as_retriever(
-            search_type="mmr",
-            search_kwargs={"k": k, "fetch_k": fetch_k, "lambda_mult": MMR_LAMBDA},
-        )
-    return _retriever
+            pass
+    return _store
 
 
 def _format_context(docs) -> str:
@@ -89,12 +88,33 @@ def _format_context(docs) -> str:
 
 
 def retrieve(pregunta: str) -> tuple[str, list[str]]:
-    """Recupera los fragmentos relevantes. Devuelve (contexto_formateado, fuentes)."""
-    docs = _get_retriever().invoke(pregunta)
-    if not docs:
+    """
+    Recupera los fragmentos relevantes. Devuelve (contexto_formateado, fuentes).
+
+    Pasos: pide FETCH_K candidatos con su distancia coseno -> si ni el mejor
+    baja de ABS_CEILING no hay nada relevante -> el contexto son los que estén
+    dentro de best*CONTEXT_RATIO (hasta TOP_K) y las fuentes citadas solo los
+    que estén dentro de best*CITE_RATIO.
+    """
+    pairs = _get_store().similarity_search_with_score(pregunta, k=FETCH_K)
+    if not pairs:
         return "", []
-    sources = sorted({d.metadata.get("source", "desconocido") for d in docs})
-    return _format_context(docs), sources
+
+    pairs.sort(key=lambda p: p[1])          # menor distancia = más relevante
+    best = pairs[0][1]
+    if best > ABS_CEILING:
+        logger.info("RAG: nada relevante (dist. mejor=%.3f > %.2f)", best, ABS_CEILING)
+        return "", []
+
+    ctx_docs = [d for d, dist in pairs if dist <= best * CONTEXT_RATIO][:TOP_K]
+    cite_docs = [d for d, dist in pairs if dist <= best * CITE_RATIO] or [pairs[0][0]]
+
+    logger.info(
+        "RAG: %d candidatos -> %d al contexto, %d fuente(s) (dist. mejor=%.3f)",
+        len(pairs), len(ctx_docs), len(cite_docs), best,
+    )
+    sources = sorted({d.metadata.get("source", "desconocido") for d in cite_docs})
+    return _format_context(ctx_docs), sources
 
 
 def answer_messages(pregunta: str, context: str) -> list[BaseMessage]:

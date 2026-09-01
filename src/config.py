@@ -98,9 +98,10 @@ LLM_BASE_URL = _opt("LLM_BASE_URL") or _LLM_BASE_URLS.get(LLM_PROVIDER)
 #  Embeddings
 # --------------------------------------------------------------------------
 EMBEDDING_PROVIDER = _opt("EMBEDDING_PROVIDER", "local").lower()
-# Modelo multilingüe: los documentos y las preguntas están en español.
-# (El anterior, bge-small-en, era solo inglés y degradaba la recuperación.)
-LOCAL_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+# Modelo multilingüe AJUSTADO PARA RECUPERACIÓN (no solo similitud): con mpnet
+# el PDF de privacidad puntuaba más alto que el documento correcto; e5 separa
+# bien español. ~2,2 GB, se descarga una vez; el corpus es pequeño.
+LOCAL_EMBEDDING_MODEL = "intfloat/multilingual-e5-large"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 
 # --------------------------------------------------------------------------
@@ -140,6 +141,9 @@ CHROMA_PERSIST_DIR = str(
 )
 DOCS_DIR = str((PROJECT_ROOT / "data" / "docs").resolve())
 CHROMA_COLLECTION = "documentos_comerciales"
+# Distancia coseno: separa mucho mejor que L2 con embeddings de tipo
+# sentence-transformers y permite un umbral de relevancia absoluto estable.
+CHROMA_COLLECTION_METADATA = {"hnsw:space": "cosine"}
 
 # --------------------------------------------------------------------------
 #  Logging

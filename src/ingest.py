@@ -27,6 +27,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from .config import (
     CHROMA_COLLECTION,
+    CHROMA_COLLECTION_METADATA,
     CHROMA_PERSIST_DIR,
     DOCS_DIR,
     get_embeddings,
@@ -101,6 +102,7 @@ def ingest(append: bool = False) -> int:
         collection_name=CHROMA_COLLECTION,
         embedding_function=get_embeddings(),
         persist_directory=str(persist_dir),
+        collection_metadata=CHROMA_COLLECTION_METADATA,
     )
     vectorstore.add_documents(chunks)
     logger.info(
