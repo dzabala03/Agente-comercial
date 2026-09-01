@@ -37,14 +37,21 @@ Clasifica la pregunta del usuario en UNA categoría:
             devoluciones, garantías, fichas de producto, procedimientos...).
 - "mixta" : necesita AMBOS.
 
+Regla: los PLAZOS, DÍAS, CONDICIONES, PORCENTAJES o IMPORTES que fija una
+política o un contrato son "rag", aunque la frase mencione "pedido" o "cliente"
+o empiece por "cuántos". Solo es "sql" si hay que CONTAR o SUMAR filas reales
+de la base de datos.
+
 Ejemplos:
-¿Cuántos clientes hay en España?                          -> sql
-¿Cuáles son los 5 productos más vendidos?                 -> sql
-¿Cuál es la política de devoluciones?                     -> rag
-¿Qué garantía tiene la bici de montaña?                  -> rag
-¿Ingram usa mis datos para registrarme como cliente?     -> rag
-¿Qué dice la página 8 del PDF sobre datos personales?    -> rag
-¿Qué descuento máximo aplico al cliente que más compra?   -> mixta
+¿Cuántos clientes hay en España?                              -> sql
+¿Cuáles son los 5 productos más vendidos?                     -> sql
+¿Cuál es la política de devoluciones?                         -> rag
+¿Qué garantía tiene la bici de montaña?                      -> rag
+¿Ingram usa mis datos para registrarme como cliente?         -> rag
+¿Qué dice la página 8 del PDF sobre datos personales?        -> rag
+¿Cuántos días hay para devolver un pedido por desistimiento?  -> rag
+¿Qué descuento corresponde a 30.000 € de compra anual?       -> rag
+¿Qué descuento máximo aplico al cliente que más compra?       -> mixta
 
 Responde SOLO con una palabra: sql, rag o mixta.
 PREGUNTA: {question}
@@ -53,16 +60,23 @@ CATEGORÍA:"""
 # Atajos por palabras clave: solo hacen cortocircuito cuando la señal es FUERTE
 # y de un único tipo. Un sustantivo suelto ("clientes", "productos") NO basta:
 # en ese caso se deja decidir al LLM clasificador.
+# "cuántos" solo cuenta como señal de dato si va seguido (cerca) de un
+# sustantivo de la base; así "¿cuántos días para devolver?" no dispara sql.
 _DATA_HINTS = re.compile(
-    r"\b(cu[aá]nt[oa]s?|cu[aá]les?\s+son|top\s*\d|ranking|promedio|media|"
-    r"total(es)?\s+de|listad[oa]\s+de|n[uú]mero\s+de|pipeline|"
-    r"suma\s+de|m[aá]ximo|m[ií]nimo)\b",
+    r"(\bcu[aá]nt[oa]s?\s+(?:\w+\s+){0,2}"
+    r"(?:clientes?|pedidos?|productos?|art[ií]culos?|ventas?|unidades?|"
+    r"pa[ií]ses?|regiones?|filas?|registros?|categor[ií]as?)\b"
+    r"|\bcu[aá]les?\s+son\b|\btop\s*\d|\branking\b|\bpromedio\b|\bmedia\b"
+    r"|\btotal(?:es)?\s+de\b|\blistad[oa]\s+de\b|\bn[uú]mero\s+de\b|\bpipeline\b"
+    r"|\bsuma\s+de\b|\bm[aá]ximo\b|\bm[ií]nimo\b)",
     re.I,
 )
 _DOC_HINTS = re.compile(
-    r"\b(pol[ií]tica|garant[ií]a|devoluci[oó]n|reembolso|descuento|bonificaci[oó]n|"
-    r"procedimiento|ficha|cat[aá]logo|rma|c[oó]mo\s+se|qu[eé]\s+dice|"
-    r"privacidad|datos?\s+personales?|declaraci[oó]n|aviso|cl[aá]usula|apartado|"
+    r"\b(pol[ií]tica|garant[ií]a|devoluci[oó]n|devolver|devuelv|desistimiento|"
+    r"reembolso|descuento|bonificaci[oó]n|acumulable|pronto\s+pago|reemplazo|"
+    r"reposici[oó]n|plazo|procedimiento|ficha|cat[aá]logo|rma|c[oó]mo\s+se|"
+    r"qu[eé]\s+dice|privacidad|datos?\s+personales?|declaraci[oó]n|aviso|"
+    r"cl[aá]usula|apartado|d[ií]as?\s+(?:para|h[aá]biles|naturales|laborables)|"
     r"p[aá]g(?:ina)?\.?\s*\d|pdf|documento|contrato|manual|"
     r"seg[uú]n\s+(el|la|lo)\b)",
     re.I,
@@ -70,8 +84,8 @@ _DOC_HINTS = re.compile(
 # Sustantivos "de datos" sin verbo de agregación: no bastan para ir a 'sql',
 # pero SÍ impiden el atajo a 'rag' -> se deja decidir al LLM (puede ser 'mixta').
 _DATA_NOUNS = re.compile(
-    r"\b(pedidos?|ventas?|clientes?|productos?|importes?|factura|"
-    r"comprad?|compra[rn]?|vendid|pipeline)\b",
+    r"\b(pedidos?|ventas?|clientes?|productos?|art[ií]culos?|importes?|"
+    r"factura|pipeline)\b",
     re.I,
 )
 
@@ -163,8 +177,12 @@ def prepare(pregunta: str) -> tuple[dict, Iterable[str]]:
         s = sql_agent.solve_sql(pregunta)
         if s["sql"]:
             meta["queries"] = [s["sql"]]
-        if s["blocked"]:
+        out_of_scope = s["blocked"] == "fuera_de_alcance"
+        if s["blocked"] and not out_of_scope:
             return meta, iter([sql_agent.BLOCKED_MSG])
+        # 'fuera_de_alcance' en ruta 'mixta': seguimos solo con los documentos.
+        if out_of_scope and route == "sql":
+            return meta, iter([sql_agent.OUT_OF_SCOPE_MSG])
         if s["error"]:
             meta["error"] = s["error"]
 
@@ -180,7 +198,12 @@ def prepare(pregunta: str) -> tuple[dict, Iterable[str]]:
         # --- mixta: añadimos los documentos y sintetizamos ---
         context, sources = rag_agent.retrieve(pregunta)
         meta["sources"] = sources
-        rows = "(sin datos)" if s["error"] else (s["rows"] or "(sin filas)")
+        if out_of_scope:
+            rows = "(la base de datos no aplica a esta pregunta)"
+        elif s["error"]:
+            rows = "(sin datos)"
+        else:
+            rows = s["rows"] or "(sin filas)"
         msgs = _SYNTH_PROMPT.format_messages(
             question=pregunta,
             sql=s["sql"] or "-",

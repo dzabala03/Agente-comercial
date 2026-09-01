@@ -33,6 +33,15 @@ BLOCKED_MSG = (
     "lectura, únicamente consultas SELECT."
 )
 
+OUT_OF_SCOPE_MSG = (
+    "Esa pregunta no se responde con los datos de la base comercial "
+    "(clientes, pedidos, ventas, productos)."
+)
+
+# El generador devuelve este token cuando la pregunta no se puede responder con
+# las tablas disponibles (en vez de fabricar un SELECT de valores constantes).
+_NO_DATA_TOKEN = "SIN_DATOS"
+
 # Reglas de estilo compartidas: preciso, directo, sin análisis no solicitado.
 STYLE_RULES = (
     "Reglas de estilo (obligatorias):\n"
@@ -115,6 +124,16 @@ _GEN_PROMPT = ChatPromptTemplate.from_messages(
             + "\n\n"
             + _FEW_SHOT
             + "\n\nNotas de negocio:\n"
+            "- Si NINGUNA parte de la pregunta se puede responder con estas "
+            "tablas (es enteramente sobre políticas, plazos, condiciones o "
+            "cultura general), responde EXACTAMENTE con la palabra SIN_DATOS y "
+            "nada más; NO inventes un SELECT de valores constantes. Pero si "
+            "CUALQUIER parte pide datos de clientes/pedidos/ventas/productos "
+            "(p. ej. 'qué clientes superan 50.000', 'el cliente que más compra'), "
+            "genera el SELECT para ESA parte e ignora el resto.\n"
+            "- Para identificar un producto en el resultado usa SIEMPRE la "
+            "columna `Name`, nunca `ProductNumber`, salvo que se pida la "
+            "referencia explícitamente.\n"
             "- Cualquier métrica de un cliente (cuánto compra, ranking, nº de "
             "pedidos, ticket medio) se calcula con AGREGADOS sobre "
             "{schema}.SalesOrderHeader: SUM(TotalDue), COUNT(*), AVG(TotalDue). "
@@ -204,6 +223,9 @@ def solve_sql(pregunta: str) -> dict:
         return {"sql": None, "rows": None, "blocked": "intento de escritura", "error": None}
 
     sql_raw = _generate_sql(pregunta)
+    if sql_raw.strip().upper().startswith(_NO_DATA_TOKEN):
+        logger.info("El generador marcó la pregunta como fuera del alcance de la BD.")
+        return {"sql": None, "rows": None, "blocked": "fuera_de_alcance", "error": None}
     clean, blocked = _check_and_prep(sql_raw)
     if blocked:
         return {"sql": None, "rows": None, "blocked": blocked, "error": None}
@@ -240,7 +262,8 @@ def answer_sql(pregunta: str) -> dict:
         }
 
     if s["blocked"]:
-        return {"answer": BLOCKED_MSG, "queries": [], "error": None}
+        msg = OUT_OF_SCOPE_MSG if s["blocked"] == "fuera_de_alcance" else BLOCKED_MSG
+        return {"answer": msg, "queries": [], "error": None}
     if s["error"]:
         return {
             "answer": "No pude ejecutar la consulta contra la base de datos.",
