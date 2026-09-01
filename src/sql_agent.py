@@ -43,6 +43,64 @@ STYLE_RULES = (
     "- Sin emojis. En español."
 )
 
+# Relaciones entre tablas (claves foráneas del esquema SalesLT). Darlas explícitas
+# evita joins inventados.
+_FK_RELATIONS = (
+    "Relaciones (claves foráneas):\n"
+    "- SalesOrderHeader.CustomerID = Customer.CustomerID\n"
+    "- SalesOrderDetail.SalesOrderID = SalesOrderHeader.SalesOrderID\n"
+    "- SalesOrderDetail.ProductID = Product.ProductID\n"
+    "- Product.ProductCategoryID = ProductCategory.ProductCategoryID\n"
+    "- Product.ProductModelID = ProductModel.ProductModelID\n"
+    "- ProductCategory.ParentProductCategoryID = ProductCategory.ProductCategoryID\n"
+    "- CustomerAddress.CustomerID = Customer.CustomerID\n"
+    "- CustomerAddress.AddressID = Address.AddressID"
+)
+
+# Ejemplos (pregunta -> SELECT) de los patrones más frecuentes. Guían el estilo
+# de join y agregación sin encarecer apenas el prompt.
+_FEW_SHOT = """\
+Ejemplos:
+
+P: ¿Qué 5 clientes han comprado más?
+SELECT TOP 5 c.CompanyName, SUM(soh.TotalDue) AS TotalCompras
+FROM SalesLT.SalesOrderHeader soh
+JOIN SalesLT.Customer c ON c.CustomerID = soh.CustomerID
+GROUP BY c.CompanyName
+ORDER BY TotalCompras DESC
+
+P: ¿Cuánto se ha vendido por categoría de producto?
+SELECT pc.Name AS Categoria, SUM(sod.LineTotal) AS TotalVendido
+FROM SalesLT.SalesOrderDetail sod
+JOIN SalesLT.Product p ON p.ProductID = sod.ProductID
+JOIN SalesLT.ProductCategory pc ON pc.ProductCategoryID = p.ProductCategoryID
+GROUP BY pc.Name
+ORDER BY TotalVendido DESC
+
+P: ¿Cuántos pedidos hubo en 2008?
+SELECT COUNT(*) AS NumPedidos
+FROM SalesLT.SalesOrderHeader
+WHERE OrderDate >= '2008-01-01' AND OrderDate < '2009-01-01'
+
+P: ¿Cuál es el ticket medio del cliente 29847?
+SELECT AVG(TotalDue) AS TicketMedio
+FROM SalesLT.SalesOrderHeader
+WHERE CustomerID = 29847
+
+P: ¿Cuáles son los 10 productos más vendidos por unidades?
+SELECT TOP 10 p.Name, SUM(sod.OrderQty) AS Unidades
+FROM SalesLT.SalesOrderDetail sod
+JOIN SalesLT.Product p ON p.ProductID = sod.ProductID
+GROUP BY p.Name
+ORDER BY Unidades DESC
+
+P: ¿Cuántos clientes hay por país?
+SELECT a.CountryRegion, COUNT(DISTINCT ca.CustomerID) AS NumClientes
+FROM SalesLT.CustomerAddress ca
+JOIN SalesLT.Address a ON a.AddressID = ca.AddressID
+GROUP BY a.CountryRegion
+ORDER BY NumClientes DESC"""
+
 _GEN_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
@@ -53,7 +111,10 @@ _GEN_PROMPT = ChatPromptTemplate.from_messages(
             "comentarios, sin ``` y sin punto y coma final.\n\n"
             "Esquema disponible (usa SIEMPRE el prefijo `{schema}.` en las tablas):\n"
             "{schema_info}\n\n"
-            "Notas de negocio:\n"
+            + _FK_RELATIONS
+            + "\n\n"
+            + _FEW_SHOT
+            + "\n\nNotas de negocio:\n"
             "- Cualquier métrica de un cliente (cuánto compra, ranking, nº de "
             "pedidos, ticket medio) se calcula con AGREGADOS sobre "
             "{schema}.SalesOrderHeader: SUM(TotalDue), COUNT(*), AVG(TotalDue). "
