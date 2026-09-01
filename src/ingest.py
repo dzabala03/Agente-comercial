@@ -35,9 +35,10 @@ from .config import (
 
 logger = get_logger("ingest")
 
-# ~800 tokens ≈ 3200 caracteres; solape ~15 %.
-CHUNK_SIZE = 3200
-CHUNK_OVERLAP = 400
+# Fragmentos más pequeños = recuperación más precisa cuando un término aparece
+# en varios sitios del documento. ~500 tokens ≈ 2000 caracteres; solape ~12 %.
+CHUNK_SIZE = 2000
+CHUNK_OVERLAP = 250
 
 _LOADERS = {
     ".pdf": PyPDFLoader,

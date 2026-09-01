@@ -42,24 +42,36 @@ Ejemplos:
 ¿Cuáles son los 5 productos más vendidos?                 -> sql
 ¿Cuál es la política de devoluciones?                     -> rag
 ¿Qué garantía tiene la bici de montaña?                  -> rag
+¿Ingram usa mis datos para registrarme como cliente?     -> rag
+¿Qué dice la página 8 del PDF sobre datos personales?    -> rag
 ¿Qué descuento máximo aplico al cliente que más compra?   -> mixta
 
 Responde SOLO con una palabra: sql, rag o mixta.
 PREGUNTA: {question}
 CATEGORÍA:"""
 
-# Atajos por palabras clave: si la señal es de un solo tipo, no gastamos una
-# llamada en clasificar.
+# Atajos por palabras clave: solo hacen cortocircuito cuando la señal es FUERTE
+# y de un único tipo. Un sustantivo suelto ("clientes", "productos") NO basta:
+# en ese caso se deja decidir al LLM clasificador.
 _DATA_HINTS = re.compile(
     r"\b(cu[aá]nt[oa]s?|cu[aá]les?\s+son|top\s*\d|ranking|promedio|media|"
-    r"total(es)?\s+de|listad[oa]\s+de|n[uú]mero\s+de|pipeline|factura|"
-    r"pedidos?|ventas?|clientes?|productos?|importes?|comprad)\b",
+    r"total(es)?\s+de|listad[oa]\s+de|n[uú]mero\s+de|pipeline|"
+    r"suma\s+de|m[aá]ximo|m[ií]nimo)\b",
     re.I,
 )
 _DOC_HINTS = re.compile(
     r"\b(pol[ií]tica|garant[ií]a|devoluci[oó]n|reembolso|descuento|bonificaci[oó]n|"
     r"procedimiento|ficha|cat[aá]logo|rma|c[oó]mo\s+se|qu[eé]\s+dice|"
-    r"seg[uú]n\s+(el|la)\s+(documento|contrato|manual|pol[ií]tica))\b",
+    r"privacidad|datos?\s+personales?|declaraci[oó]n|aviso|cl[aá]usula|apartado|"
+    r"p[aá]g(?:ina)?\.?\s*\d|pdf|documento|contrato|manual|"
+    r"seg[uú]n\s+(el|la|lo)\b)",
+    re.I,
+)
+# Sustantivos "de datos" sin verbo de agregación: no bastan para ir a 'sql',
+# pero SÍ impiden el atajo a 'rag' -> se deja decidir al LLM (puede ser 'mixta').
+_DATA_NOUNS = re.compile(
+    r"\b(pedidos?|ventas?|clientes?|productos?|importes?|factura|"
+    r"comprad?|compra[rn]?|vendid|pipeline)\b",
     re.I,
 )
 
@@ -90,9 +102,10 @@ _SYNTH_PROMPT = ChatPromptTemplate.from_messages(
 def _classify(pregunta: str) -> str:
     data = bool(_DATA_HINTS.search(pregunta))
     doc = bool(_DOC_HINTS.search(pregunta))
+    data_noun = bool(_DATA_NOUNS.search(pregunta))
     if data and not doc:
         return "sql"
-    if doc and not data:
+    if doc and not data and not data_noun:
         return "rag"
     try:
         raw = (
@@ -108,7 +121,11 @@ def _classify(pregunta: str) -> str:
                 return r
     except Exception:
         logger.exception("Fallo del clasificador; se usa heurística")
-    return "mixta" if (data and doc) else "sql"
+    if doc and (data or data_noun):
+        return "mixta"
+    if doc:
+        return "rag"
+    return "sql"
 
 
 def _stream(messages) -> Iterator[str]:

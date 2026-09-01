@@ -23,7 +23,11 @@ from .config import (
 
 logger = get_logger("rag_agent")
 
-TOP_K = 4
+TOP_K = 6
+# MMR: de un primer conjunto amplio (FETCH_K) elige TOP_K diversos, evitando
+# devolver varios fragmentos casi idénticos cuando un término se repite.
+FETCH_K = 25
+MMR_LAMBDA = 0.5
 
 _PROMPT = ChatPromptTemplate.from_messages(
     [
@@ -64,8 +68,15 @@ def _get_retriever():
             logger.warning(
                 "El índice Chroma está vacío. Ejecuta 'python -m src.ingest' primero."
             )
-        k = TOP_K if count < 0 else max(1, min(TOP_K, count))
-        _retriever = store.as_retriever(search_kwargs={"k": k})
+        if count < 0:
+            k, fetch_k = TOP_K, FETCH_K
+        else:
+            k = max(1, min(TOP_K, count))
+            fetch_k = max(k, min(FETCH_K, count))
+        _retriever = store.as_retriever(
+            search_type="mmr",
+            search_kwargs={"k": k, "fetch_k": fetch_k, "lambda_mult": MMR_LAMBDA},
+        )
     return _retriever
 
 

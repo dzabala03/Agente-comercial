@@ -73,6 +73,12 @@ def _opt(name: str, default: str = "") -> str:
 LLM_PROVIDER = _opt("LLM_PROVIDER", "deepseek").lower()
 LLM_MODEL = _opt("LLM_MODEL", "deepseek-chat")
 
+# Azure OpenAI no habla el protocolo "base_url estilo OpenAI": usa su propio
+# cliente (endpoint del recurso + api-version + nombre del deployment).
+# Aquí LLM_MODEL = nombre del DEPLOYMENT en Azure (no el nombre del modelo base).
+AZURE_OPENAI_ENDPOINT = _opt("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_API_VERSION = _opt("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+
 # base_url según proveedor (todos hablan el protocolo estilo OpenAI)
 _LLM_BASE_URLS = {
     "deepseek": "https://api.deepseek.com",
@@ -80,19 +86,21 @@ _LLM_BASE_URLS = {
     "openrouter": "https://openrouter.ai/api/v1",
     "ollama": "http://localhost:11434/v1",
 }
-if LLM_PROVIDER not in _LLM_BASE_URLS:
+if LLM_PROVIDER != "azure" and LLM_PROVIDER not in _LLM_BASE_URLS:
     raise RuntimeError(
         f"LLM_PROVIDER='{LLM_PROVIDER}' no soportado. "
-        f"Usa uno de: {', '.join(_LLM_BASE_URLS)}."
+        f"Usa uno de: azure, {', '.join(_LLM_BASE_URLS)}."
     )
 # LLM_BASE_URL del .env tiene prioridad (permite endpoints self-host o proxys).
-LLM_BASE_URL = _opt("LLM_BASE_URL") or _LLM_BASE_URLS[LLM_PROVIDER]
+LLM_BASE_URL = _opt("LLM_BASE_URL") or _LLM_BASE_URLS.get(LLM_PROVIDER)
 
 # --------------------------------------------------------------------------
 #  Embeddings
 # --------------------------------------------------------------------------
 EMBEDDING_PROVIDER = _opt("EMBEDDING_PROVIDER", "local").lower()
-LOCAL_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+# Modelo multilingüe: los documentos y las preguntas están en español.
+# (El anterior, bge-small-en, era solo inglés y degradaba la recuperación.)
+LOCAL_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 
 # --------------------------------------------------------------------------
@@ -195,6 +203,24 @@ def get_llm(temperature: float = 0.0, reasoning: bool = True):
       hace falta razonar y sí interesa que sea rápido y conciso. Solo tiene
       efecto en OpenRouter (parámetro unificado 'reasoning').
     """
+    if LLM_PROVIDER == "azure":
+        from langchain_openai import AzureChatOpenAI
+
+        if not AZURE_OPENAI_ENDPOINT:
+            raise RuntimeError(
+                "LLM_PROVIDER=azure requiere AZURE_OPENAI_ENDPOINT en .env "
+                "(p.ej. https://<tu-recurso>.openai.azure.com/)."
+            )
+        return AzureChatOpenAI(
+            azure_deployment=LLM_MODEL,
+            azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            api_version=AZURE_OPENAI_API_VERSION,
+            api_key=_req("LLM_API_KEY"),
+            temperature=temperature,
+            timeout=60,
+            max_retries=2,
+        )
+
     from langchain_openai import ChatOpenAI
 
     default_headers: dict | None = None
@@ -303,7 +329,7 @@ def describe_runtime() -> dict:
     return {
         "LLM_PROVIDER": LLM_PROVIDER,
         "LLM_MODEL": LLM_MODEL,
-        "LLM_BASE_URL": LLM_BASE_URL or "(por defecto del SDK)",
+        "LLM_BASE_URL": LLM_BASE_URL or AZURE_OPENAI_ENDPOINT or "(por defecto del SDK)",
         "EMBEDDING_PROVIDER": EMBEDDING_PROVIDER,
         "SQL_SERVER": f"{SQL_SERVER_HOST}:{SQL_SERVER_PORT}/{SQL_SERVER_DB}",
         "SQL_SERVER_USER": SQL_SERVER_USER,
